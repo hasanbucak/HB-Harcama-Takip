@@ -1,8 +1,5 @@
 package com.hasanbucak.harcamatakip.ui.screens
 
-import android.Manifest
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -69,7 +66,6 @@ fun SetupAndLogsScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var notifEnabled by remember { mutableStateOf(SystemPermissionHelper.isNotificationListenerEnabled(context)) }
-    var smsGranted by remember { mutableStateOf(SystemPermissionHelper.isSmsPermissionGranted(context)) }
     var batteryIgnored by remember { mutableStateOf(SystemPermissionHelper.isIgnoringBatteryOptimizations(context)) }
     var customTestBank by remember { mutableStateOf(BankProvider.YAPI_KREDI) }
     var customTestText by remember { mutableStateOf("") }
@@ -77,7 +73,6 @@ fun SetupAndLogsScreen(
 
     fun refreshPermissions() {
         notifEnabled = SystemPermissionHelper.isNotificationListenerEnabled(context)
-        smsGranted = SystemPermissionHelper.isSmsPermissionGranted(context)
         batteryIgnored = SystemPermissionHelper.isIgnoringBatteryOptimizations(context)
     }
 
@@ -89,12 +84,6 @@ fun SetupAndLogsScreen(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
-    val smsPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) {
-        refreshPermissions()
     }
 
     LazyColumn(
@@ -164,36 +153,20 @@ fun SetupAndLogsScreen(
                     HorizontalDivider()
 
                     PermissionRow(
-                        title = "SMS Okuma İzni (YAPIKREDI • VAKIFBANK • TOMBank)",
-                        subtitle = if (smsGranted) {
-                            "Aktif • Klasik SMS harcama mesajları doğrudan yakalanır"
-                        } else {
-                            "Kapalı • SMS bildirimlerini yakalamak için izin verin"
-                        },
-                        granted = smsGranted,
-                        actionLabel = "İzin Ver",
-                        onAction = {
-                            smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS)
-                        }
-                    )
-
-                    HorizontalDivider()
-
-                    PermissionRow(
-                        title = "Pil Kısıtlaması Muafiyeti",
+                        title = "Uygulama Arka Plan Ayarları (İsteğe Bağlı)",
                         subtitle = if (batteryIgnored) {
-                            "Aktif • Arka planda kapanmaya karşı korumalı"
+                            "Aktif • Arka plan kısıtlaması yok"
                         } else {
-                            "Kısıtlı • Android'in servisi uyutmaması için muaf tutun"
+                            "Xiaomi / Samsung cihazlarda gecikme olursa Uygulama Bilgisi ekranından Pil -> Kısıtlama Yok seçebilirsiniz"
                         },
                         granted = batteryIgnored,
-                        actionLabel = "Muaf Tut",
+                        actionLabel = "Uygulama Bilgisi",
                         onAction = {
-                            context.startActivity(SystemPermissionHelper.buildBatteryOptimizationIntent(context))
+                            context.startActivity(SystemPermissionHelper.buildAppDetailsSettingsIntent(context))
                         }
                     )
 
-                    if (!notifEnabled || !smsGranted) {
+                    if (!notifEnabled) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             shape = RoundedCornerShape(10.dp)

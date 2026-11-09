@@ -1,17 +1,17 @@
 package com.hasanbucak.harcamatakip.util
 
-import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
-import androidx.core.content.ContextCompat
 import com.hasanbucak.harcamatakip.service.YkbNotificationListenerService
 
 object SystemPermissionHelper {
+
+    private const val PREFS_NAME = "hb_app_prefs"
+    private const val KEY_DISCLOSURE_ACCEPTED = "prominent_disclosure_accepted"
 
     fun isNotificationListenerEnabled(context: Context): Boolean {
         val cn = ComponentName(context, YkbNotificationListenerService::class.java)
@@ -22,11 +22,16 @@ object SystemPermissionHelper {
         return flat.split(':').any { ComponentName.unflattenFromString(it) == cn }
     }
 
-    fun isSmsPermissionGranted(context: Context): Boolean {
-        return ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.RECEIVE_SMS
-        ) == PackageManager.PERMISSION_GRANTED
+    fun hasAcceptedProminentDisclosure(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_DISCLOSURE_ACCEPTED, false)
+    }
+
+    fun setProminentDisclosureAccepted(context: Context, accepted: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_DISCLOSURE_ACCEPTED, accepted)
+            .apply()
     }
 
     fun isIgnoringBatteryOptimizations(context: Context): Boolean {
@@ -40,15 +45,10 @@ object SystemPermissionHelper {
         }
     }
 
-    fun buildBatteryOptimizationIntent(context: Context): Intent {
-        return Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-            data = Uri.parse("package:${context.packageName}")
-        }
-    }
-
     fun buildAppDetailsSettingsIntent(context: Context): Intent {
         return Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
             data = Uri.parse("package:${context.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
     }
 }
