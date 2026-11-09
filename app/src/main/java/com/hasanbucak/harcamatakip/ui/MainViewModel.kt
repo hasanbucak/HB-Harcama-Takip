@@ -7,12 +7,12 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hasanbucak.harcamatakip.HarcamaApp
+import com.hasanbucak.harcamatakip.data.IngestResult
 import com.hasanbucak.harcamatakip.data.local.CardEntity
 import com.hasanbucak.harcamatakip.data.local.RawNotificationLogEntity
 import com.hasanbucak.harcamatakip.data.local.TransactionEntity
 import com.hasanbucak.harcamatakip.domain.parser.BankProvider
 import com.hasanbucak.harcamatakip.domain.parser.DetectedCardType
-import com.hasanbucak.harcamatakip.domain.parser.ParseOutcome
 import com.hasanbucak.harcamatakip.domain.parser.ParsedTransactionType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -309,7 +309,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 bankHint = sample.bank,
                 title = sample.title,
                 body = sample.body,
-                timestamp = Instant.now().toEpochMilli()
+                timestamp = Instant.now().toEpochMilli(),
+                isDemo = true
             )
             testFeedbackFlow.value = formatOutcomeFeedback(outcome)
         }
@@ -324,20 +325,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 bankHint = bank,
                 title = bank.displayName,
                 body = rawText.trim(),
-                timestamp = Instant.now().toEpochMilli()
+                timestamp = Instant.now().toEpochMilli(),
+                isDemo = true
             )
             testFeedbackFlow.value = formatOutcomeFeedback(outcome)
         }
     }
 
-    private fun formatOutcomeFeedback(outcome: ParseOutcome): String {
-        return when (outcome) {
-            is ParseOutcome.Success -> {
-                val t = outcome.transaction
-                "Kaydedildi [${t.bank.displayName} • ${t.detectedCardType.labelTr}]: ${t.merchant} • ${t.amount} ${t.currency} (Kart: ${t.cardLast4})"
+    private fun formatOutcomeFeedback(result: IngestResult): String {
+        return when (result) {
+            is IngestResult.Saved -> {
+                val t = result.transaction
+                "Kaydedildi [${result.cardAlias}]: ${t.merchant} • ${t.amount} ${t.currency}"
             }
-            is ParseOutcome.Ignored -> "Atlandı: ${outcome.reason}"
-            is ParseOutcome.Unparsed -> "Ayrıştırılamadı (Ham loga eklendi): ${outcome.reason}"
+            is IngestResult.MergedDuplicate -> "Mükerrer birleştirildi: ${result.detail}"
+            is IngestResult.AlreadyProcessed -> "Zaten işlendi: ${result.detail}"
+            is IngestResult.PendingReview -> "Bekleyenler kutusuna alındı: ${result.reason}"
+            is IngestResult.Ignored -> "Atlandı: ${result.reason}"
         }
     }
 
@@ -360,6 +364,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 bank = bank,
                 cardLast4 = cardLast4,
                 cardType = cardType,
+                groupId = null,
                 merchant = merchant,
                 amount = amount,
                 currency = currency,
@@ -380,7 +385,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rememberForMerchant: Boolean
     ) {
         viewModelScope.launch {
-            repository.updateTransaction(entity, newCategory, newNote, rememberForMerchant)
+            repository.updateTransaction(entity, newCategory, entity.groupId, newNote, rememberForMerchant)
         }
     }
 

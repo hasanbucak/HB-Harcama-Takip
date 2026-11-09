@@ -303,9 +303,6 @@ private fun CardEditorDialog(
                                 onClick = {
                                     selectedBank = b
                                     selectedColor = b.defaultColorHex
-                                    if (b == BankProvider.VAKIFBANK && last4.isBlank()) {
-                                        last4 = "6251"
-                                    }
                                 },
                                 label = { Text(b.displayName) }
                             )

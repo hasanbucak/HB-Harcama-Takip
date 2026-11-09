@@ -71,9 +71,6 @@ sealed class ParseOutcome {
 
 object YkbTransactionParser {
 
-    @Deprecated("Legacy migration constant; card rules are now user-configured via BankRuleEntity")
-    const val VAKIFBANK_ALLOWED_LAST4 = "6251"
-
     private val DIRECT_BANK_PACKAGES: Map<String, BankProvider> = mapOf(
         "com.ykb.android" to BankProvider.YAPI_KREDI,
         "com.ykb.avm" to BankProvider.YAPI_KREDI,

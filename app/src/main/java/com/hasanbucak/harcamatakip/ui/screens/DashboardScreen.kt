@@ -800,9 +800,7 @@ fun AddManualTransactionDialog(
                             selected = selectedBank == b,
                             onClick = {
                                 selectedBank = b
-                                if (b == BankProvider.VAKIFBANK) {
-                                    cardLast4 = YkbTransactionParser.VAKIFBANK_ALLOWED_LAST4
-                                } else if (b == BankProvider.OTHER) {
+                                if (b == BankProvider.OTHER) {
                                     selectedCardType = DetectedCardType.CASH
                                     cardLast4 = "NAKIT"
                                 }
