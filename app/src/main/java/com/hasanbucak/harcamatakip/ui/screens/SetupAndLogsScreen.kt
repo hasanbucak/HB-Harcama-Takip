@@ -1,5 +1,6 @@
 package com.hasanbucak.harcamatakip.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -16,16 +17,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -50,11 +54,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.hasanbucak.harcamatakip.data.local.PendingReviewEntity
 import com.hasanbucak.harcamatakip.data.local.RawNotificationLogEntity
 import com.hasanbucak.harcamatakip.domain.parser.BankProvider
+import com.hasanbucak.harcamatakip.domain.parser.DetectedCardType
+import com.hasanbucak.harcamatakip.domain.parser.ParsedTransactionType
 import com.hasanbucak.harcamatakip.ui.DashboardUiState
 import com.hasanbucak.harcamatakip.ui.Formatters
 import com.hasanbucak.harcamatakip.ui.MainViewModel
+import com.hasanbucak.harcamatakip.util.ListenerHealthTracker
 import com.hasanbucak.harcamatakip.util.SystemPermissionHelper
 
 @Composable
@@ -66,14 +74,23 @@ fun SetupAndLogsScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var notifEnabled by remember { mutableStateOf(SystemPermissionHelper.isNotificationListenerEnabled(context)) }
+    var disclosureAccepted by remember { mutableStateOf(SystemPermissionHelper.hasAcceptedProminentDisclosure(context)) }
     var batteryIgnored by remember { mutableStateOf(SystemPermissionHelper.isIgnoringBatteryOptimizations(context)) }
+    var showDisclosureDialog by remember { mutableStateOf(false) }
+    var showPrivacyDialog by remember { mutableStateOf(false) }
+
     var customTestBank by remember { mutableStateOf(BankProvider.YAPI_KREDI) }
     var customTestText by remember { mutableStateOf("") }
+    var testAsRealRecord by remember { mutableStateOf(false) }
+
+    var approvingPending by remember { mutableStateOf<PendingReviewEntity?>(null) }
     var convertingLog by remember { mutableStateOf<RawNotificationLogEntity?>(null) }
 
     fun refreshPermissions() {
         notifEnabled = SystemPermissionHelper.isNotificationListenerEnabled(context)
+        disclosureAccepted = SystemPermissionHelper.hasAcceptedProminentDisclosure(context)
         batteryIgnored = SystemPermissionHelper.isIgnoringBatteryOptimizations(context)
+        ListenerHealthTracker.load(context)
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -91,34 +108,65 @@ fun SetupAndLogsScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Offline privacy guarantee banner
+        // 1. Offline & Privacy Guarantee Banner
         item {
             Surface(
                 color = MaterialTheme.colorScheme.secondaryContainer,
                 shape = RoundedCornerShape(14.dp)
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(
-                        Icons.Default.Lock,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "%100 Çevrimdışı • Sıfır İnternet ve SMS İzni",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
                     Text(
-                        text = "İnternet izni (INTERNET) manifest'te kapalıdır. Tüm Yapı Kredi, VakıfBank ve TOM Bank kayıtları yalnızca telefonun yerel SQLite veritabanında tutulur.",
+                        text = "Uygulamada INTERNET ve RECEIVE_SMS izinleri bulunmaz. Tüm harcama kayıtları yalnızca telefonun yerel SQLite veritabanında işlenir; OTP/şifre mesajları veritabanına kaydedilmez. Uygulamanın adı geçen bankalarla resmi bir bağlantısı yoktur.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
+                    TextButton(onClick = { showPrivacyDialog = true }) {
+                        Text("Gizlilik Politikası ve Veri Güvenliği Detayı")
+                    }
                 }
             }
         }
 
-        // Permissions checklist card
+        // 2. Pending Reviews Inbox (Bekleyenler Kutusu)
+        if (state.pendingReviews.isNotEmpty()) {
+            item {
+                Text(
+                    text = "Bekleyen İşlemler Kutusu (${state.pendingReviews.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            items(state.pendingReviews, key = { "pending_${it.id}" }) { pending ->
+                PendingReviewCard(
+                    item = pending,
+                    onApprove = { approvingPending = pending },
+                    onBlockCard = { viewModel.dismissOrBlockPendingReview(pending.id, blockCard = true) },
+                    onDismiss = { viewModel.dismissOrBlockPendingReview(pending.id, blockCard = false) }
+                )
+            }
+        }
+
+        // 3. Listener Health & Android Setup Card
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -131,33 +179,70 @@ fun SetupAndLogsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "1. Android İzin Durumu",
+                        text = "Bildirim Dinleyici ve Sistem Sağlığı",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
 
                     PermissionRow(
-                        title = "Bildirim Erişimi (Yapı Kredi • VakıfBank • TOM Bank)",
+                        title = "Bildirim Erişimi (13 Banka Push + Mesajlar/RCS)",
                         subtitle = if (notifEnabled) {
-                            "Aktif • Banka Push ve RCS/Mesaj bildirimleri dinleniyor"
+                            "Aktif • Banka uygulama bildirimleri ve SMS/RCS başlıkları dinleniyor"
                         } else {
-                            "Kapalı • Push ve mesaj bildirimlerini okumak için açılmalı"
+                            "Kapalı • Otomatik harcama yakalama için açabilir veya manuel kullanabilirsin"
                         },
                         granted = notifEnabled,
                         actionLabel = "Ayarları Aç",
                         onAction = {
-                            context.startActivity(SystemPermissionHelper.buildNotificationListenerSettingsIntent())
+                            if (disclosureAccepted) {
+                                context.startActivity(SystemPermissionHelper.buildNotificationListenerSettingsIntent())
+                            } else {
+                                showDisclosureDialog = true
+                            }
                         }
                     )
+
+                    // Listener health telemetry
+                    val health = state.listenerHealth
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            val connStr = if (health.lastConnectedAt > 0L) {
+                                Formatters.formatDateTime(health.lastConnectedAt)
+                            } else {
+                                "Henüz bağlanmadı"
+                            }
+                            val lastEventStr = if (health.lastBankEventAt > 0L) {
+                                "${Formatters.formatDateTime(health.lastBankEventAt)} (${health.lastBankEventSource})"
+                            } else {
+                                "Henüz banka bildirimi düşmedi"
+                            }
+                            Text(
+                                text = "Son Servis Bağlantısı: $connStr",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Text(
+                                text = "Yakalanan Son Banka Bildirimi: $lastEventStr",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
 
                     HorizontalDivider()
 
                     PermissionRow(
-                        title = "Uygulama Arka Plan Ayarları (İsteğe Bağlı)",
+                        title = "Xiaomi HyperOS / Samsung Arka Plan Ayarı (İsteğe Bağlı)",
                         subtitle = if (batteryIgnored) {
-                            "Aktif • Arka plan kısıtlaması yok"
+                            "Aktif • Arka plan pil kısıtlaması kapalı"
                         } else {
-                            "Xiaomi / Samsung cihazlarda gecikme olursa Uygulama Bilgisi ekranından Pil -> Kısıtlama Yok seçebilirsiniz"
+                            "Bildirimler gecikirse Uygulama Bilgisi ekranından 'Otomatik Başlatma' açıp Pil -> 'Kısıtlama Yok' seçebilirsin"
                         },
                         granted = batteryIgnored,
                         actionLabel = "Uygulama Bilgisi",
@@ -176,12 +261,12 @@ fun SetupAndLogsScreen(
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Text(
-                                    text = "Android 13/14/15 'Kısıtlı Ayar' Uyarısı Çıkarsa:",
+                                    text = "Mağaza Dışı (APK) Kurulumda 'Kısıtlı Ayar' Çıkarsa:",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "APK elle kurulduğunda izin düğmesi gri görünebilir. Aşağıdaki 'Uygulama Bilgisi' ekranını açıp sağ üstteki (⋮) menüden 'Kısıtlı ayarlara izin ver' seçeneğine dokunun.",
+                                    text = "Android 13+ cihazlarda APK elle kurulduğunda Bildirim Erişimi kilitli görünebilir. Önce 'Uygulama Bilgisi' ekranını açıp sağ üstteki (⋮) menüden 'Kısıtlı ayarlara izin ver' seçeneğini onaylayın.",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 TextButton(
@@ -198,33 +283,7 @@ fun SetupAndLogsScreen(
             }
         }
 
-        // Active bank rules summary
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "2. Aktif Banka ve Kart Kuralları",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "• Yapı Kredi: Yapı Kredi Mobil (com.ykb.android), World Mobil (com.ykb.avm) ve YAPIKREDI SMS -> Tüm kartlar kaydedilir.\n• VakıfBank: VakıfBank Mobil (com.vakifbank.mobile) ve VAKIFBANK SMS -> Yalnızca sonu 6251 olan kart kaydedilir.\n• TOM Bank: TOM Bank Hadi (com.tom.hadi) ve TOMBank / HADI SMS -> Tüm kartlar kaydedilir.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-
-        // Simulation & custom parser tester
+        // 4. Isolated Demo & Custom Parser Tester
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -237,28 +296,36 @@ fun SetupAndLogsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "3. Canlı Ayrıştırıcı (Parser) Testi",
+                        text = "Demo Simülasyonu ve Ayrıştırıcı Testi",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Button(
-                        onClick = { viewModel.simulateNextSample() },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Örnek Harcama Simüle Et (YKB / Vakıf 6251 / TOMBank)")
+                    Text(
+                        text = "Demo kayıtları gerçek harcama toplamlarını ve CSV/PDF/JSON çıktılarını etkilemez.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { viewModel.simulateNextSample() },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Demo Harcama Üret")
+                        }
+                        if (state.demoTransactionCount > 0) {
+                            OutlinedButton(onClick = { viewModel.clearDemoTransactions() }) {
+                                Text("Demo Sil (${state.demoTransactionCount})")
+                            }
+                        }
                     }
 
                     Row(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        listOf(
-                            BankProvider.YAPI_KREDI,
-                            BankProvider.VAKIFBANK,
-                            BankProvider.TOM_BANK
-                        ).forEach { b ->
+                        BankProvider.selectableBanks.forEach { b ->
                             FilterChip(
                                 selected = customTestBank == b,
                                 onClick = { customTestBank = b },
@@ -270,39 +337,37 @@ fun SetupAndLogsScreen(
                     OutlinedTextField(
                         value = customTestText,
                         onValueChange = { customTestText = it },
-                        label = { Text("${customTestBank.displayName} SMS / Bildirim metnini yapıştırıp test et") },
+                        label = { Text("${customTestBank.displayName} örnek bildirim metnini test et") },
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { testAsRealRecord = !testAsRealRecord }
+                    ) {
+                        Checkbox(checked = testAsRealRecord, onCheckedChange = { testAsRealRecord = it })
+                        Text(
+                            text = "Demo yerine gerçek harcama olarak işle",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+
                     if (customTestText.isNotBlank()) {
                         OutlinedButton(
                             onClick = {
-                                viewModel.testCustomNotificationText(customTestBank, customTestText)
+                                viewModel.testCustomNotificationText(customTestBank, customTestText, testAsRealRecord)
                                 customTestText = ""
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Metni İşle ve Kaydet")
-                        }
-                    }
-
-                    state.lastTestFeedback?.let { msg ->
-                        Surface(
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text(
-                                text = msg,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(10.dp)
-                            )
+                            Text("Metni Ayrıştır")
                         }
                     }
                 }
             }
         }
 
-        // Raw logs header
+        // 5. Raw Notification Logs Header
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -342,7 +407,7 @@ fun SetupAndLogsScreen(
             items(state.recentLogs, key = { it.id }) { log ->
                 RawLogCard(
                     log = log,
-                    onConvertUnparsed = { convertingLog = log }
+                    onConvertManual = { convertingLog = log }
                 )
             }
         }
@@ -350,22 +415,132 @@ fun SetupAndLogsScreen(
         item { Spacer(modifier = Modifier.height(24.dp)) }
     }
 
+    // Google Play Mandatory Prominent Disclosure Modal
+    if (showDisclosureDialog) {
+        AlertDialog(
+            onDismissRequest = { showDisclosureDialog = false },
+            title = { Text("Bildirim Erişimi Aydınlatma Metni") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "HB Harcama Takip, kart harcamalarınızı ve iadelerinizi otomatik olarak kaydedebilmek için Android Bildirim Erişimi (NotificationListenerService) iznine ihtiyaç duyar.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "• Neler okunur: Yalnızca desteklenen 13 banka mobil uygulamasının ve tanımlı banka SMS/RCS başlıklarının harcama/iade bildirim metinleri okunur. Kişisel sohbetleriniz okunmaz.\n" +
+                            "• Nasıl işlenir: Tutar, işyeri ve kart son 4 hanesi yalnızca telefonunuzun içinde ayrıştırılır. Tek kullanımlık şifre (OTP) içerikleri veritabanına kaydedilmez.\n" +
+                            "• Veri paylaşımı: Uygulamada INTERNET izni yoktur; hiçbir veriniz sunucuya gönderilmez veya üçüncü taraflarla paylaşılmaz.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        SystemPermissionHelper.setProminentDisclosureAccepted(context, true)
+                        disclosureAccepted = true
+                        showDisclosureDialog = false
+                        context.startActivity(SystemPermissionHelper.buildNotificationListenerSettingsIntent())
+                    }
+                ) {
+                    Text("Kabul Ediyorum")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisclosureDialog = false }) {
+                    Text("Reddet (Manuel Kullan)")
+                }
+            }
+        )
+    }
+
+    if (showPrivacyDialog) {
+        AlertDialog(
+            onDismissRequest = { showPrivacyDialog = false },
+            title = { Text("Gizlilik ve Veri Güvenliği Beyanı") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "1. Sıfır Ağ Erişimi: Uygulama AndroidManifest üzerinde android.permission.INTERNET izni içermez. Verileriniz cihaz dışına çıkamaz.\n\n" +
+                            "2. OTP Sıfır Kayıt: Şifre ve doğrulama kodu mesajları algılandığında gövde metni veritabanına yazılmaz.\n\n" +
+                            "3. Veri Saklama: Ham bildirim metinleri 30 gün sonra otomatik temizlenir; istediğiniz zaman tüm kayıtları silebilir veya JSON yedeği alabilirsiniz.\n\n" +
+                            "4. Bağımsızlık: Bu uygulama bağımsız bir kişisel finans aracıdır; adı geçen hiçbir bankayla resmi bağlantısı veya ortaklığı yoktur.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showPrivacyDialog = false }) {
+                    Text("Tamam")
+                }
+            }
+        )
+    }
+
+    approvingPending?.let { p ->
+        val bank = BankProvider.fromCode(p.bankCode)
+        AddManualTransactionDialog(
+            cards = state.cards,
+            groups = state.cardGroups,
+            initialBank = if (bank == BankProvider.OTHER) BankProvider.YAPI_KREDI else bank,
+            initialLast4 = if (p.cardLast4 == "GENEL") "" else p.cardLast4,
+            initialCardType = DetectedCardType.fromCode(p.detectedCardType),
+            initialMerchant = p.merchant,
+            initialAmount = p.amount.takeIf { it > 0.0 },
+            initialCurrency = p.currency,
+            initialIsRefund = p.transactionType == ParsedTransactionType.REFUND.name,
+            initialInstallments = p.installmentCount,
+            initialTimestamp = p.timestamp,
+            initialRawText = p.body,
+            dialogTitle = "Bekleyen İşlemi Onayla & Kartı Kaydet",
+            onDismiss = { approvingPending = null },
+            onSave = { b, last4, cType, grpId, merch, amt, curr, cat, refund, inst, _, _ ->
+                viewModel.approvePendingReview(
+                    pendingId = p.id,
+                    bank = b,
+                    cardLast4 = last4,
+                    cardType = cType,
+                    groupId = grpId,
+                    merchant = merch,
+                    amount = amt,
+                    currency = curr,
+                    category = cat,
+                    isRefund = refund,
+                    installmentCount = inst
+                )
+                approvingPending = null
+            }
+        )
+    }
+
     convertingLog?.let { log ->
         AddManualTransactionDialog(
             cards = state.cards,
+            groups = state.cardGroups,
+            initialTimestamp = log.timestamp,
             initialRawText = log.body,
+            dialogTitle = "Bildirimi Harcamaya Dönüştür",
             onDismiss = { convertingLog = null },
-            onSave = { bank, last4, cardType, merchant, amount, currency, category, isRefund, installments, note ->
+            onSave = { bank, last4, cardType, grpId, merchant, amount, currency, category, isRefund, installments, ts, note ->
                 viewModel.addManualTransaction(
                     bank = bank,
                     cardLast4 = last4,
                     cardType = cardType,
+                    groupId = grpId,
                     merchant = merchant,
                     amount = amount,
                     currency = currency,
                     category = category,
                     isRefund = isRefund,
                     installmentCount = installments,
+                    timestamp = ts,
                     note = note,
                     rawText = log.body,
                     sourceLogId = log.id
@@ -373,6 +548,65 @@ fun SetupAndLogsScreen(
                 convertingLog = null
             }
         )
+    }
+}
+
+@Composable
+private fun PendingReviewCard(
+    item: PendingReviewEntity,
+    onApprove: () -> Unit,
+    onBlockCard: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = item.reasonDetail,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.error
+            )
+            if (item.amount > 0.0) {
+                Text(
+                    text = "${item.merchant} • ${Formatters.formatMoney(item.amount, item.currency)}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Text(
+                text = item.body,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = "${item.sourceChannel} • ${Formatters.formatDateTime(item.timestamp)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(onClick = onApprove) {
+                    Text("Kartı Ekle & Kaydet")
+                }
+                if (item.cardLast4 != "GENEL") {
+                    OutlinedButton(onClick = onBlockCard) {
+                        Text("Kartı Engelle (${item.cardLast4})")
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Yoksay")
+                }
+            }
+        }
     }
 }
 
@@ -403,11 +637,9 @@ private fun PermissionRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        if (!granted) {
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(onClick = onAction) {
-                Text(actionLabel)
-            }
+        Spacer(modifier = Modifier.width(8.dp))
+        OutlinedButton(onClick = onAction) {
+            Text(actionLabel)
         }
     }
 }
@@ -415,18 +647,19 @@ private fun PermissionRow(
 @Composable
 private fun RawLogCard(
     log: RawNotificationLogEntity,
-    onConvertUnparsed: () -> Unit
+    onConvertManual: () -> Unit
 ) {
     val badgeColor = when (log.status) {
         "SAVED" -> Color(0xFF16A34A)
         "DUPLICATE" -> Color(0xFF0284C7)
-        "UNPARSED" -> Color(0xFFDC2626)
+        "PENDING", "UNPARSED" -> Color(0xFFDC2626)
         else -> Color(0xFF6B7280)
     }
 
     val statusText = when (log.status) {
         "SAVED" -> "KAYDEDİLDİ"
-        "DUPLICATE" -> "MÜKERRER ENGELLENDİ"
+        "DUPLICATE" -> "MÜKERRER BİRLEŞTİRİLDİ"
+        "PENDING" -> "ONAY BEKLİYOR"
         "UNPARSED" -> "AYRIŞTIRILAMADI"
         else -> "ATLANDI / HARCAMA DEĞİL"
     }
@@ -466,8 +699,8 @@ private fun RawLogCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.secondary
             )
-            if (log.status == "UNPARSED") {
-                TextButton(onClick = onConvertUnparsed) {
+            if (log.status == "UNPARSED" || log.status == "IGNORED" || log.status == "PENDING") {
+                TextButton(onClick = onConvertManual) {
                     Text("Elle Harcamaya Dönüştür")
                 }
             }

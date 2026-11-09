@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gizlilik Politikası — HB Harcama Takip</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 780px; margin: 32px auto; padding: 0 20px; line-height: 1.65; color: #1e293b; }
+        h1 { color: #1e3a8a; }
+        h2 { color: #0f172a; margin-top: 28px; }
+        .box { background: #f1f5f9; border-left: 4px solid #1e3a8a; padding: 14px 18px; border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <h1>Gizlilik Politikası — HB Harcama Takip</h1>
+    <p><strong>Son güncelleme:</strong> 10 Kasım 2026</p>
+
+    <div class="box">
+        <strong>Özet:</strong> HB Harcama Takip uygulaması <code>android.permission.INTERNET</code> iznine sahip değildir. Hiçbir finansal veri, bildirim metni, kart son 4 hanesi veya kişisel bilgi cihazınızdan dışarı çıkmaz, uzak bir sunucuya iletilmez ve üçüncü taraflarla paylaşılmaz.
+    </div>
+
+    <h2>1. Erişilen Veriler ve Kullanım Amacı</h2>
+    <p>Uygulama, yalnızca kullanıcının açık onayıyla etkinleştirdiği Android <strong>Bildirim Erişimi (NotificationListenerService)</strong> özelliği üzerinden desteklenen banka uygulamalarının ve banka SMS/RCS bildirim başlıklarının harcama/iade bildirim metinlerini cihaz üzerinde anlık olarak okur. Bu erişim yalnızca:</p>
+    <ul>
+        <li>Harcama veya iade tutarını, para birimini ve işyeri adını ayrıştırmak,</li>
+        <li>İşlemi kullanıcının tanımladığı kart son 4 hanesi, kart bölümü (Kişisel / Ev / İş vb.) ve harcama kategorisiyle eşleştirmek</li>
+    </ul>
+    <p>amacıyla kullanılır. Kullanıcı Bildirim Erişimi iznini vermeden de uygulamayı manuel harcama takibi modunda kullanabilir.</p>
+
+    <h2>2. Veri Minimizasyonu ve Güvenlik (OTP Koruması)</h2>
+    <ul>
+        <li>Tek kullanımlık şifre (OTP), 3D Secure doğrulama kodu ve mobil giriş şifresi bildirimleri harcama olarak işlenmez ve ham içerikleri veritabanına kaydedilmez.</li>
+        <li>Tüm kayıtlar yalnızca cihazın uygulama içi yerel SQLite (Room) veritabanında tutulur; otomatik bulut yedeklemesi (<code>allowBackup="false"</code>) kapalıdır.</li>
+        <li>CSV, PDF veya JSON dışa aktarma işlemleri yalnızca kullanıcının kendi başlatacağı sistem paylaşım/dosya kaydetme ekranı üzerinden gerçekleşir.</li>
+    </ul>
+
+    <h2>3. Bağımsızlık Beyanı</h2>
+    <p>Bu uygulama bağımsız bir kişisel bütçe ve harcama takip aracıdır; uygulama içinde adı geçen hiçbir banka veya finans kuruluşuyla resmi bir bağlantısı, ortaklığı veya sponsorluğu yoktur.</p>
+
+    <h2>4. Veri Silme</h2>
+    <p>Kullanıcı uygulama içinden istediği işlemi, kartı veya bildirim günlüğünü tek dokunuşla silebilir ya da Android Uygulama Bilgisi ekranından uygulama verilerini temizleyerek tüm yerel kayıtları kalıcı olarak kaldırabilir.</p>
+
+    <h2>5. İletişim</h2>
+    <p>Gizlilik politikasıyla ilgili sorularınız için: <code>hasanbucaktr@gmail.com</code></p>
+</body>
+</html>

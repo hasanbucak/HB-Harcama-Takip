@@ -16,9 +16,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -44,10 +48,20 @@ class MainActivity : ComponentActivity() {
                 val vm: MainViewModel = viewModel()
                 val state by vm.uiState.collectAsStateWithLifecycle()
                 var currentTab by rememberSaveable { mutableIntStateOf(initialTab) }
+                val snackbarHostState = remember { SnackbarHostState() }
 
-                val unparsedCount = state.recentLogs.count { it.status == "UNPARSED" }
+                val pendingCount = state.pendingReviews.size
+
+                LaunchedEffect(state.lastFeedbackMessage) {
+                    val msg = state.lastFeedbackMessage
+                    if (!msg.isNullOrBlank()) {
+                        snackbarHostState.showSnackbar(msg)
+                        vm.clearFeedback()
+                    }
+                }
 
                 Scaffold(
+                    snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                     bottomBar = {
                         NavigationBar {
                             NavigationBarItem(
@@ -60,7 +74,7 @@ class MainActivity : ComponentActivity() {
                                 selected = currentTab == 1,
                                 onClick = { currentTab = 1 },
                                 icon = { Icon(Icons.Default.CreditCard, contentDescription = null) },
-                                label = { Text("Kartlarım") }
+                                label = { Text("Kartlar & Bölüm") }
                             )
                             NavigationBarItem(
                                 selected = currentTab == 2,
@@ -68,15 +82,15 @@ class MainActivity : ComponentActivity() {
                                 icon = {
                                     BadgedBox(
                                         badge = {
-                                            if (unparsedCount > 0) {
-                                                Badge { Text(unparsedCount.toString()) }
+                                            if (pendingCount > 0) {
+                                                Badge { Text(pendingCount.toString()) }
                                             }
                                         }
                                     ) {
                                         Icon(Icons.Default.Tune, contentDescription = null)
                                     }
                                 },
-                                label = { Text("Kurulum & Log") }
+                                label = { Text("Bekleyen & Ayar") }
                             )
                         }
                     }

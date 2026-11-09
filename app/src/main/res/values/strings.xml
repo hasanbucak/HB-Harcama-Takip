@@ -1,5 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">HB Harcama Takip</string>
-    <string name="notification_service_label">Banka Harcama Dinleyici</string>
+    <string name="notification_service_label">HB Banka Harcama Bildirim Dinleyici</string>
 </resources>
