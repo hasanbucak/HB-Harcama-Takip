@@ -3,6 +3,7 @@ package com.hasanbucak.harcamatakip.ui.screens
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -27,6 +29,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +54,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.hasanbucak.harcamatakip.data.local.RawNotificationLogEntity
+import com.hasanbucak.harcamatakip.domain.parser.BankProvider
 import com.hasanbucak.harcamatakip.ui.DashboardUiState
 import com.hasanbucak.harcamatakip.ui.Formatters
 import com.hasanbucak.harcamatakip.ui.MainViewModel
@@ -67,6 +71,7 @@ fun SetupAndLogsScreen(
     var notifEnabled by remember { mutableStateOf(SystemPermissionHelper.isNotificationListenerEnabled(context)) }
     var smsGranted by remember { mutableStateOf(SystemPermissionHelper.isSmsPermissionGranted(context)) }
     var batteryIgnored by remember { mutableStateOf(SystemPermissionHelper.isIgnoringBatteryOptimizations(context)) }
+    var customTestBank by remember { mutableStateOf(BankProvider.YAPI_KREDI) }
     var customTestText by remember { mutableStateOf("") }
     var convertingLog by remember { mutableStateOf<RawNotificationLogEntity?>(null) }
 
@@ -116,7 +121,7 @@ fun SetupAndLogsScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "İnternet izni (INTERNET) manifest'te kapalıdır. Tüm kart ve harcama kayıtları yalnızca telefonun yerel SQLite veritabanında tutulur.",
+                        text = "İnternet izni (INTERNET) manifest'te kapalıdır. Tüm Yapı Kredi, VakıfBank ve TOM Bank kayıtları yalnızca telefonun yerel SQLite veritabanında tutulur.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
@@ -143,11 +148,11 @@ fun SetupAndLogsScreen(
                     )
 
                     PermissionRow(
-                        title = "Bildirim Erişimi (Yapı Kredi & World Mobil)",
+                        title = "Bildirim Erişimi (Yapı Kredi • VakıfBank • TOM Bank)",
                         subtitle = if (notifEnabled) {
-                            "Aktif • com.ykb.android ve com.ykb.avm dinleniyor"
+                            "Aktif • Banka Push ve RCS/Mesaj bildirimleri dinleniyor"
                         } else {
-                            "Kapalı • Push bildirimlerini okumak için açılmalı"
+                            "Kapalı • Push ve mesaj bildirimlerini okumak için açılmalı"
                         },
                         granted = notifEnabled,
                         actionLabel = "Ayarları Aç",
@@ -159,9 +164,9 @@ fun SetupAndLogsScreen(
                     HorizontalDivider()
 
                     PermissionRow(
-                        title = "SMS Okuma İzni (YAPIKREDI SMS Yedeği)",
+                        title = "SMS Okuma İzni (YAPIKREDI • VAKIFBANK • TOMBank)",
                         subtitle = if (smsGranted) {
-                            "Aktif • İnternetsiz ortamda SMS harcamaları yakalanır"
+                            "Aktif • Klasik SMS harcama mesajları doğrudan yakalanır"
                         } else {
                             "Kapalı • SMS bildirimlerini yakalamak için izin verin"
                         },
@@ -220,7 +225,7 @@ fun SetupAndLogsScreen(
             }
         }
 
-        // Yapi Kredi internal app settings reminder
+        // Active bank rules summary
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -233,12 +238,12 @@ fun SetupAndLogsScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = "2. Yapı Kredi / World Mobil Ayar Kontrolü",
+                        text = "2. Aktif Banka ve Kart Kuralları",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "• Yapı Kredi Mobil veya World Mobil -> Profilim / Ayarlarım -> Bildirim Ayarları menüsünden Kredi Kartı ve Banka Kartı harcama bildirimlerinin açık olduğundan emin olun.\n• Bildirim alt limit tutarı varsa 0 TL yapın ki küçük temassız işlemler de anında düşsün.",
+                        text = "• Yapı Kredi: Yapı Kredi Mobil (com.ykb.android), World Mobil (com.ykb.avm) ve YAPIKREDI SMS -> Tüm kartlar kaydedilir.\n• VakıfBank: VakıfBank Mobil (com.vakifbank.mobile) ve VAKIFBANK SMS -> Yalnızca sonu 6251 olan kart kaydedilir.\n• TOM Bank: TOM Bank Hadi (com.tom.hadi) ve TOMBank / HADI SMS -> Tüm kartlar kaydedilir.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -269,19 +274,36 @@ fun SetupAndLogsScreen(
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Örnek Yapı Kredi Harcaması Simüle Et")
+                        Text("Örnek Harcama Simüle Et (YKB / Vakıf 6251 / TOMBank)")
+                    }
+
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            BankProvider.YAPI_KREDI,
+                            BankProvider.VAKIFBANK,
+                            BankProvider.TOM_BANK
+                        ).forEach { b ->
+                            FilterChip(
+                                selected = customTestBank == b,
+                                onClick = { customTestBank = b },
+                                label = { Text(b.displayName) }
+                            )
+                        }
                     }
 
                     OutlinedTextField(
                         value = customTestText,
                         onValueChange = { customTestText = it },
-                        label = { Text("Gerçek SMS / Bildirim metnini yapıştırıp test et") },
+                        label = { Text("${customTestBank.displayName} SMS / Bildirim metnini yapıştırıp test et") },
                         modifier = Modifier.fillMaxWidth()
                     )
                     if (customTestText.isNotBlank()) {
                         OutlinedButton(
                             onClick = {
-                                viewModel.testCustomNotificationText(customTestText)
+                                viewModel.testCustomNotificationText(customTestBank, customTestText)
                                 customTestText = ""
                             },
                             modifier = Modifier.fillMaxWidth()
@@ -360,9 +382,11 @@ fun SetupAndLogsScreen(
             cards = state.cards,
             initialRawText = log.body,
             onDismiss = { convertingLog = null },
-            onSave = { last4, merchant, amount, currency, category, isRefund, installments, note ->
+            onSave = { bank, last4, cardType, merchant, amount, currency, category, isRefund, installments, note ->
                 viewModel.addManualTransaction(
+                    bank = bank,
                     cardLast4 = last4,
+                    cardType = cardType,
                     merchant = merchant,
                     amount = amount,
                     currency = currency,
@@ -431,7 +455,7 @@ private fun RawLogCard(
         "SAVED" -> "KAYDEDİLDİ"
         "DUPLICATE" -> "MÜKERRER ENGELLENDİ"
         "UNPARSED" -> "AYRIŞTIRILAMADI"
-        else -> "HARCAMA DEĞİL"
+        else -> "ATLANDI / HARCAMA DEĞİL"
     }
 
     Card(

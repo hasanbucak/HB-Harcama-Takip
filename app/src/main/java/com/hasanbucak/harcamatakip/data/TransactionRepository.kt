@@ -5,6 +5,7 @@ import com.hasanbucak.harcamatakip.data.local.CardEntity
 import com.hasanbucak.harcamatakip.data.local.MerchantRuleEntity
 import com.hasanbucak.harcamatakip.data.local.RawNotificationLogEntity
 import com.hasanbucak.harcamatakip.data.local.TransactionEntity
+import com.hasanbucak.harcamatakip.domain.parser.BankProvider
 import com.hasanbucak.harcamatakip.domain.parser.CategoryClassifier
 import com.hasanbucak.harcamatakip.domain.parser.DetectedCardType
 import com.hasanbucak.harcamatakip.domain.parser.ParseOutcome
@@ -28,19 +29,37 @@ class TransactionRepository(private val db: AppDatabase) {
     companion object {
         private const val DEDUP_WINDOW_MS = 3 * 60 * 1000L
 
-        private val CARD_PALETTE: List<Long> = listOf(
+        private val YKB_CARD_PALETTE: List<Long> = listOf(
             0xFF1E3A8A, // Navy Blue
-            0xFF0F766E, // Teal
             0xFF7C3AED, // Violet
-            0xFFB45309, // Amber
-            0xFFBE123C, // Rose
-            0xFF1D4ED8  // Royal Blue
+            0xFF1D4ED8, // Royal Blue
+            0xFFBE123C  // Rose
+        )
+    }
+
+    suspend fun ensurePreconfiguredCards() {
+        val vakifKey = CardEntity.buildKey(
+            BankProvider.VAKIFBANK.code,
+            YkbTransactionParser.VAKIFBANK_ALLOWED_LAST4
+        )
+        db.cardDao().insertIfAbsent(
+            CardEntity(
+                cardKey = vakifKey,
+                bankCode = BankProvider.VAKIFBANK.code,
+                bankName = BankProvider.VAKIFBANK.displayName,
+                last4 = YkbTransactionParser.VAKIFBANK_ALLOWED_LAST4,
+                alias = "VakıfBank •••• 6251",
+                cardType = DetectedCardType.CREDIT.name,
+                statementDay = 1,
+                colorHex = BankProvider.VAKIFBANK.defaultColorHex
+            )
         )
     }
 
     suspend fun ingestIncomingMessage(
         sourceChannel: String,
         sourceTag: String,
+        bankHint: BankProvider,
         title: String?,
         body: String?,
         timestamp: Long = System.currentTimeMillis()
@@ -48,7 +67,11 @@ class TransactionRepository(private val db: AppDatabase) {
         val safeTitle = YkbTransactionParser.sanitizeForLog(title?.trim().orEmpty())
         val safeBody = YkbTransactionParser.sanitizeForLog(body?.trim().orEmpty())
 
-        val outcome = YkbTransactionParser.parse(title, body)
+        val outcome = YkbTransactionParser.parse(
+            title = title,
+            body = body,
+            bankHint = bankHint
+        )
         when (outcome) {
             is ParseOutcome.Ignored -> {
                 db.rawLogDao().insert(
@@ -82,6 +105,7 @@ class TransactionRepository(private val db: AppDatabase) {
                 val parsed = outcome.transaction
                 val txTypeStr = parsed.transactionType.name
                 val dupCount = db.transactionDao().countRecentDuplicate(
+                    bankCode = parsed.bank.code,
                     cardLast4 = parsed.cardLast4,
                     amount = parsed.amount,
                     currency = parsed.currency,
@@ -96,7 +120,7 @@ class TransactionRepository(private val db: AppDatabase) {
                             title = safeTitle,
                             body = safeBody,
                             status = "DUPLICATE",
-                            detail = "3 dk içinde aynı kart (${parsed.cardLast4}) ve tutar (${parsed.amount} ${parsed.currency}) zaten kayıtlı",
+                            detail = "3 dk içinde ${parsed.bank.displayName} (${parsed.cardLast4}) için ${parsed.amount} ${parsed.currency} zaten kayıtlı",
                             timestamp = timestamp
                         )
                     )
@@ -104,7 +128,11 @@ class TransactionRepository(private val db: AppDatabase) {
                     return@withLock outcome
                 }
 
-                ensureCardExists(parsed.cardLast4, parsed.detectedCardType)
+                val card = ensureCardExists(
+                    bank = parsed.bank,
+                    last4 = parsed.cardLast4,
+                    detectedType = parsed.detectedCardType
+                )
 
                 val normalizedMerchant = CategoryClassifier.normalizeMerchantKey(parsed.merchant)
                 val savedRuleCategory = if (normalizedMerchant.isNotEmpty()) {
@@ -113,10 +141,15 @@ class TransactionRepository(private val db: AppDatabase) {
                     null
                 }
                 val finalCategory = savedRuleCategory ?: CategoryClassifier.classify(parsed.merchant)
+                val typeLabel = DetectedCardType.fromCode(card.cardType).labelTr
 
                 db.transactionDao().insert(
                     TransactionEntity(
-                        cardLast4 = parsed.cardLast4,
+                        cardKey = card.cardKey,
+                        bankCode = card.bankCode,
+                        bankName = card.bankName,
+                        cardLast4 = card.last4,
+                        cardType = card.cardType,
                         merchant = parsed.merchant,
                         normalizedMerchant = normalizedMerchant,
                         amount = parsed.amount,
@@ -136,7 +169,7 @@ class TransactionRepository(private val db: AppDatabase) {
                         title = safeTitle,
                         body = safeBody,
                         status = "SAVED",
-                        detail = "${parsed.merchant} • ${parsed.amount} ${parsed.currency} (${parsed.cardLast4})",
+                        detail = "${card.bankName} (${card.last4} • $typeLabel) -> ${parsed.merchant} • ${parsed.amount} ${parsed.currency}",
                         timestamp = timestamp
                     )
                 )
@@ -146,33 +179,51 @@ class TransactionRepository(private val db: AppDatabase) {
         outcome
     }
 
-    private suspend fun ensureCardExists(last4: String, detectedType: DetectedCardType) {
-        val existing = db.cardDao().getCard(last4)
-        if (existing != null) return
+    private suspend fun ensureCardExists(
+        bank: BankProvider,
+        last4: String,
+        detectedType: DetectedCardType
+    ): CardEntity {
+        val cardKey = CardEntity.buildKey(bank.code, last4)
+        val existing = db.cardDao().getCard(cardKey)
+        if (existing != null) return existing
 
         val count = db.cardDao().countCards()
-        val color = CARD_PALETTE[count % CARD_PALETTE.size]
-        val defaultAlias = when {
-            last4 == "GENEL" -> "Yapı Kredi Kartım"
-            last4 == "NAKIT" -> "Nakit"
-            detectedType == DetectedCardType.VIRTUAL -> "Dijital Kart •••• $last4"
-            detectedType == DetectedCardType.DEBIT -> "TLcard •••• $last4"
-            else -> "Worldcard •••• $last4"
+        val color = when (bank) {
+            BankProvider.VAKIFBANK -> BankProvider.VAKIFBANK.defaultColorHex
+            BankProvider.TOM_BANK -> BankProvider.TOM_BANK.defaultColorHex
+            BankProvider.YAPI_KREDI -> YKB_CARD_PALETTE[count % YKB_CARD_PALETTE.size]
+            BankProvider.OTHER -> BankProvider.OTHER.defaultColorHex
         }
 
-        db.cardDao().insertIfAbsent(
-            CardEntity(
-                last4 = last4,
-                alias = defaultAlias,
-                cardType = detectedType.name,
-                statementDay = 1,
-                colorHex = color
-            )
+        val defaultAlias = when {
+            last4 == "NAKIT" -> "Nakit"
+            last4 == "GENEL" -> "${bank.displayName} Kartım"
+            bank == BankProvider.VAKIFBANK -> "VakıfBank •••• $last4"
+            bank == BankProvider.TOM_BANK -> "TOM Bank •••• $last4"
+            detectedType == DetectedCardType.VIRTUAL -> "Yapı Kredi Dijital •••• $last4"
+            detectedType == DetectedCardType.DEBIT -> "Yapı Kredi TLcard •••• $last4"
+            else -> "Yapı Kredi •••• $last4"
+        }
+
+        val created = CardEntity(
+            cardKey = cardKey,
+            bankCode = bank.code,
+            bankName = bank.displayName,
+            last4 = last4,
+            alias = defaultAlias,
+            cardType = detectedType.name,
+            statementDay = 1,
+            colorHex = color
         )
+        db.cardDao().insertIfAbsent(created)
+        return db.cardDao().getCard(cardKey) ?: created
     }
 
     suspend fun addManualTransaction(
+        bank: BankProvider,
         cardLast4: String,
+        cardType: DetectedCardType,
         merchant: String,
         amount: Double,
         currency: String,
@@ -183,16 +234,22 @@ class TransactionRepository(private val db: AppDatabase) {
         rawText: String = "Manuel kayıt",
         sourceLogId: Long? = null
     ) {
-        val cleanLast4 = cardLast4.trim().ifEmpty { "NAKIT" }
-        val detectedType = if (cleanLast4 == "NAKIT") DetectedCardType.DEBIT else DetectedCardType.CREDIT
-        ensureCardExists(cleanLast4, detectedType)
+        val cleanLast4 = cardLast4.trim().ifEmpty {
+            if (cardType == DetectedCardType.CASH) "NAKIT" else "GENEL"
+        }
+        val effectiveBank = if (cardType == DetectedCardType.CASH) BankProvider.OTHER else bank
+        val card = ensureCardExists(effectiveBank, cleanLast4, cardType)
 
         val cleanMerchant = merchant.trim().ifEmpty { "Genel Harcama" }
         val normalized = CategoryClassifier.normalizeMerchantKey(cleanMerchant)
 
         db.transactionDao().insert(
             TransactionEntity(
-                cardLast4 = cleanLast4,
+                cardKey = card.cardKey,
+                bankCode = card.bankCode,
+                bankName = if (cardType == DetectedCardType.CASH) "Nakit" else card.bankName,
+                cardLast4 = card.last4,
+                cardType = cardType.name,
                 merchant = cleanMerchant,
                 normalizedMerchant = normalized,
                 amount = amount,
@@ -242,6 +299,11 @@ class TransactionRepository(private val db: AppDatabase) {
 
     suspend fun saveCard(card: CardEntity) {
         db.cardDao().upsert(card)
+        db.transactionDao().updateCardMetadataForTransactions(
+            cardKey = card.cardKey,
+            cardType = card.cardType,
+            bankName = card.bankName
+        )
     }
 
     suspend fun clearRawLogs() {
@@ -250,15 +312,21 @@ class TransactionRepository(private val db: AppDatabase) {
 
     suspend fun buildCsvExport(): String {
         val all = db.transactionDao().getAllTransactionsSnapshot()
-        val cardsByLast4 = mutableMapOf<String, CardEntity>()
+        val cardsByKey = mutableMapOf<String, CardEntity>()
         val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
         val sb = StringBuilder()
-        sb.appendLine("Tarih;KartSon4;KartAdi;Isyeri;Kategori;IslemTipi;Taksit;Tutar;ParaBirimi;Kaynak;Not")
+        sb.appendLine("Tarih;Banka;KartSon4;KartAdi;KartTuru;Isyeri;Kategori;IslemTipi;Taksit;Tutar;ParaBirimi;Kaynak;Not")
         for (tx in all) {
-            val card = cardsByLast4.getOrPut(tx.cardLast4) {
-                db.cardDao().getCard(tx.cardLast4)
-                    ?: CardEntity(last4 = tx.cardLast4, alias = tx.cardLast4, cardType = "CREDIT")
+            val card = cardsByKey.getOrPut(tx.cardKey) {
+                db.cardDao().getCard(tx.cardKey) ?: CardEntity(
+                    cardKey = tx.cardKey,
+                    bankCode = tx.bankCode,
+                    bankName = tx.bankName,
+                    last4 = tx.cardLast4,
+                    alias = tx.cardLast4,
+                    cardType = tx.cardType
+                )
             }
             val dateStr = fmt.format(Date(tx.timestamp))
             val signedAmount = if (tx.transactionType == ParsedTransactionType.REFUND.name) {
@@ -266,11 +334,14 @@ class TransactionRepository(private val db: AppDatabase) {
             } else {
                 tx.amount
             }
+            val cardTypeTr = DetectedCardType.fromCode(tx.cardType).labelTr
             sb.appendLine(
                 listOf(
                     dateStr,
+                    escapeCsv(tx.bankName),
                     escapeCsv(tx.cardLast4),
                     escapeCsv(card.alias),
+                    escapeCsv(cardTypeTr),
                     escapeCsv(tx.merchant),
                     escapeCsv(tx.category),
                     tx.transactionType,

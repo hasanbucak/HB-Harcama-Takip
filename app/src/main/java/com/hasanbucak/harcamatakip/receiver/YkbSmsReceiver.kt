@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
 import com.hasanbucak.harcamatakip.HarcamaApp
+import com.hasanbucak.harcamatakip.domain.parser.BankProvider
 import com.hasanbucak.harcamatakip.domain.parser.YkbTransactionParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,16 +20,16 @@ class YkbSmsReceiver : BroadcastReceiver() {
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
         if (messages.isNullOrEmpty()) return
 
-        val groupedBySender = linkedMapOf<String, StringBuilder>()
+        val groupedBySender = linkedMapOf<Pair<String, BankProvider>, StringBuilder>()
         var messageTimestamp = System.currentTimeMillis()
 
         for (sms in messages) {
             val sender = sms.displayOriginatingAddress ?: sms.originatingAddress ?: continue
-            if (!YkbTransactionParser.isSupportedSmsSender(sender)) continue
+            val bank = YkbTransactionParser.resolveBankFromSmsSender(sender) ?: continue
             if (sms.timestampMillis > 0L) {
                 messageTimestamp = sms.timestampMillis
             }
-            val builder = groupedBySender.getOrPut(sender) { StringBuilder() }
+            val builder = groupedBySender.getOrPut(sender to bank) { StringBuilder() }
             builder.append(sms.displayMessageBody.orEmpty())
         }
 
@@ -39,12 +40,14 @@ class YkbSmsReceiver : BroadcastReceiver() {
 
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                for ((sender, bodyBuilder) in groupedBySender) {
+                for ((senderBankPair, bodyBuilder) in groupedBySender) {
+                    val (sender, bank) = senderBankPair
                     val fullBody = bodyBuilder.toString().trim()
                     if (fullBody.isNotEmpty()) {
                         app.repository.ingestIncomingMessage(
                             sourceChannel = "SMS ($sender)",
                             sourceTag = "SMS",
+                            bankHint = bank,
                             title = sender,
                             body = fullBody,
                             timestamp = messageTimestamp

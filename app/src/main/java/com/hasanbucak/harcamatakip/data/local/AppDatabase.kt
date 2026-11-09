@@ -12,7 +12,7 @@ import androidx.room.RoomDatabase
         MerchantRuleEntity::class,
         RawNotificationLogEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

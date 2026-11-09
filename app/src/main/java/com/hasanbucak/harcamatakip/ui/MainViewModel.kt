@@ -10,6 +10,8 @@ import com.hasanbucak.harcamatakip.HarcamaApp
 import com.hasanbucak.harcamatakip.data.local.CardEntity
 import com.hasanbucak.harcamatakip.data.local.RawNotificationLogEntity
 import com.hasanbucak.harcamatakip.data.local.TransactionEntity
+import com.hasanbucak.harcamatakip.domain.parser.BankProvider
+import com.hasanbucak.harcamatakip.domain.parser.DetectedCardType
 import com.hasanbucak.harcamatakip.domain.parser.ParseOutcome
 import com.hasanbucak.harcamatakip.domain.parser.ParsedTransactionType
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +44,8 @@ data class CategoryBreakdownItem(
 
 data class DashboardUiState(
     val selectedMonth: YearMonth = YearMonth.now(),
-    val selectedCardLast4: String? = null, // null = All cards
+    val selectedBankCode: String? = null, // null = All banks
+    val selectedCardKey: String? = null,  // null = All cards
     val useStatementCycle: Boolean = false,
     val searchQuery: String = "",
     val periodLabel: String = "",
@@ -57,9 +60,18 @@ data class DashboardUiState(
 
 private data class FilterConfig(
     val month: YearMonth,
-    val cardLast4: String?,
+    val bankCode: String?,
+    val cardKey: String?,
     val useStatementCycle: Boolean,
     val searchQuery: String
+)
+
+private data class SampleNotification(
+    val bank: BankProvider,
+    val channel: String,
+    val tag: String,
+    val title: String,
+    val body: String
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -67,6 +79,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = (application as HarcamaApp).repository
 
     private val selectedMonthFlow = MutableStateFlow(YearMonth.now())
+    private val selectedBankFlow = MutableStateFlow<String?>(null)
     private val selectedCardFlow = MutableStateFlow<String?>(null)
     private val useStatementCycleFlow = MutableStateFlow(false)
     private val searchQueryFlow = MutableStateFlow("")
@@ -74,21 +87,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var sampleIndex = 0
 
-    private val sampleMessages: List<Pair<String, String>> = listOf(
-        "Harcama Bilgisi" to "4543****4821 nolu kartınızla 09.11.2026 14:32 tarihinde MİGROS TİCARET A.Ş. işyerinden 645,50 TL tutarında harcama yapılmıştır. Güncel kullanılabilir limitiniz 84.354,50 TL'dir.",
-        "World Mobil" to "Dijital Kartınız (9104) ile TRENDYOL.COM işyerinden 3 taksitli 2.490,00 TL alışveriş yapılmıştır.",
-        "Yapı Kredi Mobil" to "TLcard'ınızla (son 4 hanesi 3310) OPET İSTASYONU işyerinden 1.450,00 TL tutarında işlem gerçekleştirilmiştir.",
-        "World Mobil" to "Dijital Kartınız (9104) ile STEAM GAMES işyerinden 14.99 USD harcama yapılmıştır.",
-        "Harcama İadesi" to "4543****4821 nolu kartınıza TRENDYOL.COM işyerinden 390,00 TL iade işlemi yapılmıştır."
+    private val sampleMessages: List<SampleNotification> = listOf(
+        SampleNotification(
+            bank = BankProvider.YAPI_KREDI,
+            channel = "Simülasyon (Yapı Kredi)",
+            tag = "PUSH_YKB",
+            title = "Harcama Bilgisi",
+            body = "4543****4821 nolu kartınızla 09.11.2026 14:32 tarihinde MİGROS TİCARET A.Ş. işyerinden 645,50 TL tutarında harcama yapılmıştır. Güncel kullanılabilir limitiniz 84.354,50 TL'dir."
+        ),
+        SampleNotification(
+            bank = BankProvider.VAKIFBANK,
+            channel = "Simülasyon (VakıfBank)",
+            tag = "SMS",
+            title = "VAKIFBANK",
+            body = "6251 ile biten Worldcard'ınızla 09.11.2026 15:10'da OPET İSTASYONU işyerinden 1.450,00 TL harcama yapılmıştır."
+        ),
+        SampleNotification(
+            bank = BankProvider.TOM_BANK,
+            channel = "Simülasyon (TOM Bank)",
+            tag = "SMS",
+            title = "TOMBank",
+            body = "*1907 nolu Hadi Kredi Kartınızla TRENDYOL.COM işyerinden 3 taksitli 2.490,00 TL harcama yapılmıştır."
+        ),
+        SampleNotification(
+            bank = BankProvider.VAKIFBANK,
+            channel = "Simülasyon (VakıfBank Diğer Kart)",
+            tag = "SMS",
+            title = "VAKIFBANK",
+            body = "9988 ile biten kartınızla A101 işyerinden 210,00 TL harcama yapılmıştır."
+        ),
+        SampleNotification(
+            bank = BankProvider.YAPI_KREDI,
+            channel = "Simülasyon (World Mobil)",
+            tag = "PUSH_WORLD",
+            title = "World Mobil",
+            body = "Dijital Kartınız (9104) ile STEAM GAMES işyerinden 14.99 USD harcama yapılmıştır."
+        )
     )
 
     private val filterConfigFlow = combine(
         selectedMonthFlow,
+        selectedBankFlow,
         selectedCardFlow,
         useStatementCycleFlow,
         searchQueryFlow
-    ) { month, card, useCycle, query ->
-        FilterConfig(month, card, useCycle, query)
+    ) { month, bank, card, useCycle, query ->
+        FilterConfig(month, bank, card, useCycle, query)
     }
 
     val uiState: StateFlow<DashboardUiState> = combine(
@@ -99,7 +143,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         testFeedbackFlow
     ) { filter, allTx, cards, logs, feedback ->
         val zone = ZoneId.systemDefault()
-        val selectedCardEntity = cards.find { it.last4 == filter.cardLast4 }
+        val selectedCardEntity = cards.find { it.cardKey == filter.cardKey }
         val statementDay = selectedCardEntity?.statementDay ?: 1
 
         val (startMillis, endMillis, periodLabel) = computePeriodBounds(
@@ -115,7 +159,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val cardTotalsTl = txInPeriod
             .filter { it.currency == "TL" }
-            .groupBy { it.cardLast4 }
+            .groupBy { it.cardKey }
             .mapValues { (_, list) ->
                 list.sumOf { tx ->
                     if (tx.transactionType == ParsedTransactionType.REFUND.name) -tx.amount else tx.amount
@@ -124,13 +168,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val queryTrimmed = filter.searchQuery.trim()
         val filtered = txInPeriod.filter { tx ->
-            val cardOk = filter.cardLast4 == null || tx.cardLast4 == filter.cardLast4
+            val bankOk = filter.bankCode == null || tx.bankCode == filter.bankCode
+            val cardOk = filter.cardKey == null || tx.cardKey == filter.cardKey
             val queryOk = queryTrimmed.isEmpty() ||
                 tx.merchant.contains(queryTrimmed, ignoreCase = true) ||
                 tx.category.contains(queryTrimmed, ignoreCase = true) ||
+                tx.bankName.contains(queryTrimmed, ignoreCase = true) ||
                 tx.note.contains(queryTrimmed, ignoreCase = true) ||
                 tx.cardLast4.contains(queryTrimmed, ignoreCase = true)
-            cardOk && queryOk
+            bankOk && cardOk && queryOk
         }
 
         val summaries = filtered
@@ -174,7 +220,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         DashboardUiState(
             selectedMonth = filter.month,
-            selectedCardLast4 = filter.cardLast4,
+            selectedBankCode = filter.bankCode,
+            selectedCardKey = filter.cardKey,
             useStatementCycle = filter.useStatementCycle,
             searchQuery = filter.searchQuery,
             periodLabel = periodLabel,
@@ -231,9 +278,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         selectedMonthFlow.value = selectedMonthFlow.value.plusMonths(1)
     }
 
-    fun selectCardFilter(cardLast4: String?) {
-        selectedCardFlow.value = cardLast4
-        if (cardLast4 == null) {
+    fun selectBankFilter(bankCode: String?) {
+        selectedBankFlow.value = bankCode
+        selectedCardFlow.value = null
+        useStatementCycleFlow.value = false
+    }
+
+    fun selectCardFilter(cardKey: String?) {
+        selectedCardFlow.value = cardKey
+        if (cardKey == null) {
             useStatementCycleFlow.value = false
         }
     }
@@ -246,32 +299,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         searchQueryFlow.value = query
     }
 
-    fun clearTestFeedback() {
-        testFeedbackFlow.value = null
-    }
-
     fun simulateNextSample() {
-        val (title, body) = sampleMessages[sampleIndex % sampleMessages.size]
+        val sample = sampleMessages[sampleIndex % sampleMessages.size]
         sampleIndex++
         viewModelScope.launch {
             val outcome = repository.ingestIncomingMessage(
-                sourceChannel = "Simülasyon Testi",
-                sourceTag = "PUSH_YKB",
-                title = title,
-                body = body,
+                sourceChannel = sample.channel,
+                sourceTag = sample.tag,
+                bankHint = sample.bank,
+                title = sample.title,
+                body = sample.body,
                 timestamp = Instant.now().toEpochMilli()
             )
             testFeedbackFlow.value = formatOutcomeFeedback(outcome)
         }
     }
 
-    fun testCustomNotificationText(rawText: String) {
+    fun testCustomNotificationText(bank: BankProvider, rawText: String) {
         if (rawText.isBlank()) return
         viewModelScope.launch {
             val outcome = repository.ingestIncomingMessage(
-                sourceChannel = "Manuel Metin Testi",
-                sourceTag = "PUSH_YKB",
-                title = "Yapı Kredi Test",
+                sourceChannel = "Manuel Test (${bank.displayName})",
+                sourceTag = "MANUAL_TEST",
+                bankHint = bank,
+                title = bank.displayName,
                 body = rawText.trim(),
                 timestamp = Instant.now().toEpochMilli()
             )
@@ -283,15 +334,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return when (outcome) {
             is ParseOutcome.Success -> {
                 val t = outcome.transaction
-                "Kaydedildi: ${t.merchant} • ${t.amount} ${t.currency} (Kart: ${t.cardLast4})"
+                "Kaydedildi [${t.bank.displayName} • ${t.detectedCardType.labelTr}]: ${t.merchant} • ${t.amount} ${t.currency} (Kart: ${t.cardLast4})"
             }
-            is ParseOutcome.Ignored -> "Atlandı (Harcama değil): ${outcome.reason}"
+            is ParseOutcome.Ignored -> "Atlandı: ${outcome.reason}"
             is ParseOutcome.Unparsed -> "Ayrıştırılamadı (Ham loga eklendi): ${outcome.reason}"
         }
     }
 
     fun addManualTransaction(
+        bank: BankProvider,
         cardLast4: String,
+        cardType: DetectedCardType,
         merchant: String,
         amount: Double,
         currency: String,
@@ -304,7 +357,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             repository.addManualTransaction(
+                bank = bank,
                 cardLast4 = cardLast4,
+                cardType = cardType,
                 merchant = merchant,
                 amount = amount,
                 currency = currency,
@@ -354,8 +409,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             val file = withContext(Dispatchers.IO) {
                 val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
-                val outFile = File(exportDir, "hb_ykb_harcamalar.csv")
-                // UTF-8 BOM ensures Excel opens Turkish characters and semicolon columns cleanly
+                val outFile = File(exportDir, "hb_banka_harcamalar.csv")
                 outFile.writeText("\uFEFF" + csvContent, Charsets.UTF_8)
                 outFile
             }
@@ -367,7 +421,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/csv"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "Yapı Kredi Harcama Kayıtları (CSV)")
+                putExtra(Intent.EXTRA_SUBJECT, "Banka Harcama Kayıtları (CSV)")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(

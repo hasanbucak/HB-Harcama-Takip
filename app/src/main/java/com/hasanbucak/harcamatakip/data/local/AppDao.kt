@@ -13,8 +13,8 @@ interface CardDao {
     @Query("SELECT * FROM cards ORDER BY createdAt ASC")
     fun observeAllCards(): Flow<List<CardEntity>>
 
-    @Query("SELECT * FROM cards WHERE last4 = :last4 LIMIT 1")
-    suspend fun getCard(last4: String): CardEntity?
+    @Query("SELECT * FROM cards WHERE cardKey = :cardKey LIMIT 1")
+    suspend fun getCard(cardKey: String): CardEntity?
 
     @Query("SELECT COUNT(*) FROM cards")
     suspend fun countCards(): Int
@@ -37,7 +37,8 @@ interface TransactionDao {
     @Query(
         """
         SELECT COUNT(*) FROM transactions
-        WHERE cardLast4 = :cardLast4
+        WHERE bankCode = :bankCode
+          AND (cardLast4 = :cardLast4 OR cardLast4 = 'GENEL' OR :cardLast4 = 'GENEL')
           AND currency = :currency
           AND transactionType = :transactionType
           AND ABS(amount - :amount) < 0.01
@@ -45,6 +46,7 @@ interface TransactionDao {
         """
     )
     suspend fun countRecentDuplicate(
+        bankCode: String,
         cardLast4: String,
         amount: Double,
         currency: String,
@@ -63,6 +65,9 @@ interface TransactionDao {
 
     @Query("UPDATE transactions SET category = :category WHERE normalizedMerchant = :normalizedMerchant")
     suspend fun updateCategoryForMerchant(normalizedMerchant: String, category: String)
+
+    @Query("UPDATE transactions SET cardType = :cardType, bankName = :bankName WHERE cardKey = :cardKey")
+    suspend fun updateCardMetadataForTransactions(cardKey: String, cardType: String, bankName: String)
 }
 
 @Dao

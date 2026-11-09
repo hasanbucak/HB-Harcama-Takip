@@ -72,7 +72,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hasanbucak.harcamatakip.data.local.CardEntity
 import com.hasanbucak.harcamatakip.data.local.TransactionEntity
+import com.hasanbucak.harcamatakip.domain.parser.BankProvider
 import com.hasanbucak.harcamatakip.domain.parser.CategoryClassifier
+import com.hasanbucak.harcamatakip.domain.parser.DetectedCardType
 import com.hasanbucak.harcamatakip.domain.parser.ParsedTransactionType
 import com.hasanbucak.harcamatakip.domain.parser.YkbTransactionParser
 import com.hasanbucak.harcamatakip.ui.DashboardUiState
@@ -91,9 +93,16 @@ fun DashboardScreen(
     var showCategoryBreakdown by remember { mutableStateOf(true) }
 
     val cardsMap = remember(state.cards) {
-        state.cards.associateBy { it.last4 }
+        state.cards.associateBy { it.cardKey }
     }
-    val selectedCard = state.selectedCardLast4?.let { cardsMap[it] }
+    val selectedCard = state.selectedCardKey?.let { cardsMap[it] }
+    val visibleCardsForBank = remember(state.cards, state.selectedBankCode) {
+        if (state.selectedBankCode == null) {
+            state.cards
+        } else {
+            state.cards.filter { it.bankCode == state.selectedBankCode }
+        }
+    }
 
     val groupedByDay = remember(state.filteredTransactions) {
         state.filteredTransactions.groupBy { Formatters.formatDayHeader(it.timestamp) }
@@ -150,10 +159,34 @@ fun DashboardScreen(
                 }
             }
 
-            // Card filter chips
-            if (state.cards.isNotEmpty()) {
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Bank filter row + Card filter row
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = state.selectedBankCode == null,
+                            onClick = { viewModel.selectBankFilter(null) },
+                            label = { Text("Tüm Bankalar") }
+                        )
+                        listOf(
+                            BankProvider.YAPI_KREDI,
+                            BankProvider.VAKIFBANK,
+                            BankProvider.TOM_BANK
+                        ).forEach { bank ->
+                            FilterChip(
+                                selected = state.selectedBankCode == bank.code,
+                                onClick = { viewModel.selectBankFilter(bank.code) },
+                                label = { Text(bank.displayName) }
+                            )
+                        }
+                    }
+
+                    if (visibleCardsForBank.isNotEmpty()) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -161,35 +194,35 @@ fun DashboardScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             FilterChip(
-                                selected = state.selectedCardLast4 == null,
+                                selected = state.selectedCardKey == null,
                                 onClick = { viewModel.selectCardFilter(null) },
                                 label = { Text("Tüm Kartlar") }
                             )
-                            state.cards.forEach { card ->
+                            visibleCardsForBank.forEach { card ->
                                 FilterChip(
-                                    selected = state.selectedCardLast4 == card.last4,
-                                    onClick = { viewModel.selectCardFilter(card.last4) },
+                                    selected = state.selectedCardKey == card.cardKey,
+                                    onClick = { viewModel.selectCardFilter(card.cardKey) },
                                     label = { Text(card.alias) }
                                 )
                             }
                         }
+                    }
 
-                        if (selectedCard != null && selectedCard.statementDay > 1) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "Hesap kesim gününe göre filtrele (Ayın ${selectedCard.statementDay}'i)",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Switch(
-                                    checked = state.useStatementCycle,
-                                    onCheckedChange = { viewModel.toggleStatementCycle(it) }
-                                )
-                            }
+                    if (selectedCard != null && selectedCard.statementDay > 1) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Hesap kesim gününe göre filtrele (Ayın ${selectedCard.statementDay}'i)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Switch(
+                                checked = state.useStatementCycle,
+                                onCheckedChange = { viewModel.toggleStatementCycle(it) }
+                            )
                         }
                     }
                 }
@@ -275,7 +308,7 @@ fun DashboardScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp),
-                    placeholder = { Text("İşyeri, kategori, kart son 4 veya not ara...") },
+                    placeholder = { Text("İşyeri, banka, kart son 4, kategori ara...") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     trailingIcon = {
                         if (state.searchQuery.isNotEmpty()) {
@@ -307,7 +340,7 @@ fun DashboardScreen(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "Yapı Kredi Mobil veya World Mobil'den harcama bildirimi düştüğünde otomatik buraya eklenecek. İstersen 'Kurulum & Log' sekmesinden örnek harcama simüle edebilirsin.",
+                                text = "Yapı Kredi, VakıfBank (6251) veya TOM Bank harcama bildirimi ya da SMS düştüğünde kart ve kart türü bilgisiyle otomatik buraya eklenecek.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -327,7 +360,7 @@ fun DashboardScreen(
                     items(items = dayList, key = { it.id }) { tx ->
                         TransactionRowCard(
                             tx = tx,
-                            card = cardsMap[tx.cardLast4],
+                            card = cardsMap[tx.cardKey],
                             onClick = { editingTx = tx }
                         )
                     }
@@ -337,9 +370,12 @@ fun DashboardScreen(
     }
 
     editingTx?.let { tx ->
+        val card = cardsMap[tx.cardKey]
+        val cardDisplay = buildCardBadgeLabel(tx, card)
+        val typeDisplay = DetectedCardType.fromCode(card?.cardType ?: tx.cardType).labelTr
         TransactionEditSheet(
             tx = tx,
-            cardAlias = cardsMap[tx.cardLast4]?.alias ?: "Kart •••• ${tx.cardLast4}",
+            cardBadgeLabel = "$cardDisplay • $typeDisplay",
             onDismiss = { editingTx = null },
             onSave = { cat, note, rememberRule ->
                 viewModel.updateTransaction(tx, cat, note, rememberRule)
@@ -356,9 +392,11 @@ fun DashboardScreen(
         AddManualTransactionDialog(
             cards = state.cards,
             onDismiss = { showAddDialog = false },
-            onSave = { last4, merchant, amount, currency, category, isRefund, installments, note ->
+            onSave = { bank, last4, cardType, merchant, amount, currency, category, isRefund, installments, note ->
                 viewModel.addManualTransaction(
+                    bank = bank,
                     cardLast4 = last4,
+                    cardType = cardType,
                     merchant = merchant,
                     amount = amount,
                     currency = currency,
@@ -370,6 +408,21 @@ fun DashboardScreen(
                 showAddDialog = false
             }
         )
+    }
+}
+
+private fun buildCardBadgeLabel(tx: TransactionEntity, card: CardEntity?): String {
+    if (card != null && card.alias.isNotBlank()) {
+        return if (card.alias.contains(tx.bankName, ignoreCase = true)) {
+            card.alias
+        } else {
+            "${tx.bankName} • ${card.alias}"
+        }
+    }
+    return when (tx.cardLast4) {
+        "NAKIT" -> "Nakit"
+        "GENEL" -> tx.bankName
+        else -> "${tx.bankName} •••• ${tx.cardLast4}"
     }
 }
 
@@ -449,7 +502,9 @@ private fun TransactionRowCard(
     onClick: () -> Unit
 ) {
     val isRefund = tx.transactionType == ParsedTransactionType.REFUND.name
-    val dotColor = Color(card?.colorHex ?: 0xFF1E3A8A)
+    val cardColor = Color(card?.colorHex ?: BankProvider.fromCode(tx.bankCode).defaultColorHex)
+    val cardLabel = buildCardBadgeLabel(tx, card)
+    val cardTypeLabel = DetectedCardType.fromCode(card?.cardType ?: tx.cardType).labelTr
 
     Card(
         modifier = Modifier
@@ -458,53 +513,98 @@ private fun TransactionRowCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(14.dp)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(12.dp)
-                    .clip(CircleShape)
-                    .background(dotColor)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = tx.merchant,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                val cardText = card?.alias ?: "Kart •••• ${tx.cardLast4}"
-                val installmentBadge = if (tx.installmentCount > 1) " • ${tx.installmentCount} Taksit" else ""
-                Text(
-                    text = "$cardText • ${tx.category}$installmentBadge • ${Formatters.formatTime(tx.timestamp)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (tx.note.isNotBlank()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(cardColor)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = tx.note,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary,
+                        text = tx.merchant,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = (if (isRefund) "+" else "-") + Formatters.formatMoney(tx.amount, tx.currency),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isRefund) Color(0xFF16A34A) else MaterialTheme.colorScheme.onSurface
+                )
             }
-            Spacer(modifier = Modifier.width(8.dp))
+
+            // Explicit Bank/Card badge + Card Type badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = cardColor.copy(alpha = 0.14f),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = cardLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = cardColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = cardTypeLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            val installmentBadge = if (tx.installmentCount > 1) " • ${tx.installmentCount} Taksit" else ""
             Text(
-                text = (if (isRefund) "+" else "-") + Formatters.formatMoney(tx.amount, tx.currency),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = if (isRefund) Color(0xFF16A34A) else MaterialTheme.colorScheme.onSurface
+                text = "${tx.category}$installmentBadge • ${Formatters.formatTime(tx.timestamp)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
+
+            if (tx.note.isNotBlank()) {
+                Text(
+                    text = tx.note,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -513,7 +613,7 @@ private fun TransactionRowCard(
 @Composable
 private fun TransactionEditSheet(
     tx: TransactionEntity,
-    cardAlias: String,
+    cardBadgeLabel: String,
     onDismiss: () -> Unit,
     onSave: (String, String, Boolean) -> Unit,
     onDelete: () -> Unit
@@ -536,7 +636,7 @@ private fun TransactionEditSheet(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "$cardAlias • ${Formatters.formatMoney(tx.amount, tx.currency)} • ${Formatters.formatDateTime(tx.timestamp)}",
+                text = "$cardBadgeLabel\n${Formatters.formatMoney(tx.amount, tx.currency)} • ${Formatters.formatDateTime(tx.timestamp)}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -639,7 +739,9 @@ fun AddManualTransactionDialog(
     initialRawText: String = "Manuel kayıt",
     onDismiss: () -> Unit,
     onSave: (
+        bank: BankProvider,
         last4: String,
+        cardType: DetectedCardType,
         merchant: String,
         amount: Double,
         currency: String,
@@ -649,7 +751,18 @@ fun AddManualTransactionDialog(
         note: String
     ) -> Unit
 ) {
-    var cardLast4 by remember { mutableStateOf(cards.firstOrNull()?.last4 ?: "NAKIT") }
+    val firstCard = cards.firstOrNull()
+    var selectedBank by remember {
+        mutableStateOf(
+            firstCard?.let { BankProvider.fromCode(it.bankCode) } ?: BankProvider.YAPI_KREDI
+        )
+    }
+    var selectedCardType by remember {
+        mutableStateOf(
+            firstCard?.let { DetectedCardType.fromCode(it.cardType) } ?: DetectedCardType.CREDIT
+        )
+    }
+    var cardLast4 by remember { mutableStateOf(firstCard?.last4 ?: "") }
     var merchant by remember { mutableStateOf("") }
     var amountText by remember { mutableStateOf("") }
     var currency by remember { mutableStateOf("TL") }
@@ -671,6 +784,48 @@ fun AddManualTransactionDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                // Bank selector
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        BankProvider.YAPI_KREDI,
+                        BankProvider.VAKIFBANK,
+                        BankProvider.TOM_BANK,
+                        BankProvider.OTHER
+                    ).forEach { b ->
+                        FilterChip(
+                            selected = selectedBank == b,
+                            onClick = {
+                                selectedBank = b
+                                if (b == BankProvider.VAKIFBANK) {
+                                    cardLast4 = YkbTransactionParser.VAKIFBANK_ALLOWED_LAST4
+                                } else if (b == BankProvider.OTHER) {
+                                    selectedCardType = DetectedCardType.CASH
+                                    cardLast4 = "NAKIT"
+                                }
+                            },
+                            label = { Text(if (b == BankProvider.OTHER) "Nakit" else b.displayName) }
+                        )
+                    }
+                }
+
+                // Card type selector
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    DetectedCardType.entries.forEach { ct ->
+                        FilterChip(
+                            selected = selectedCardType == ct,
+                            onClick = { selectedCardType = ct },
+                            label = { Text(ct.labelTr) }
+                        )
+                    }
+                }
+
                 OutlinedTextField(
                     value = merchant,
                     onValueChange = {
@@ -702,7 +857,7 @@ fun AddManualTransactionDialog(
                     OutlinedTextField(
                         value = cardLast4,
                         onValueChange = { cardLast4 = it.take(10) },
-                        label = { Text("Kart Son 4 / NAKIT") },
+                        label = { Text("Kart Son 4") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
@@ -766,7 +921,9 @@ fun AddManualTransactionDialog(
                     val parsedAmount = YkbTransactionParser.parseFlexibleAmount(amountText) ?: 0.0
                     if (parsedAmount > 0.0) {
                         onSave(
+                            selectedBank,
                             cardLast4,
+                            selectedCardType,
                             merchant,
                             parsedAmount,
                             currency.ifBlank { "TL" },

@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.hasanbucak.harcamatakip.HarcamaApp
+import com.hasanbucak.harcamatakip.domain.parser.BankProvider
 import com.hasanbucak.harcamatakip.domain.parser.YkbTransactionParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,7 +21,10 @@ class YkbNotificationListenerService : NotificationListenerService() {
         if (sbn == null) return
 
         val pkg = sbn.packageName ?: return
-        if (pkg !in YkbTransactionParser.SUPPORTED_PACKAGES) return
+        val directBank = YkbTransactionParser.resolveBankForPackage(pkg)
+        val isMessagingApp = pkg in YkbTransactionParser.MESSAGING_PACKAGES
+
+        if (directBank == null && !isMessagingApp) return
 
         val notification = sbn.notification ?: return
         if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
@@ -39,15 +43,30 @@ class YkbNotificationListenerService : NotificationListenerService() {
         }
         if (body.isBlank() && title.isBlank()) return
 
-        val sourceTag = if (pkg == "com.ykb.avm") "PUSH_WORLD" else "PUSH_YKB"
-        val channelLabel = if (pkg == "com.ykb.avm") "World Mobil ($pkg)" else "Yapı Kredi Mobil ($pkg)"
-        val postedAt = sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis()
+        // For Google/Samsung Messages (SMS/RCS), ONLY accept known bank sender headers
+        val resolvedBank: BankProvider = if (directBank != null) {
+            directBank
+        } else {
+            YkbTransactionParser.resolveBankFromSmsSender(title) ?: return
+        }
 
+        val (sourceTag, channelLabel) = when {
+            isMessagingApp -> "RCS_MSG" to "Mesajlar ($title)"
+            pkg == "com.ykb.avm" -> "PUSH_WORLD" to "World Mobil ($pkg)"
+            pkg == "com.ykb.android" -> "PUSH_YKB" to "Yapı Kredi Mobil ($pkg)"
+            resolvedBank == BankProvider.VAKIFBANK -> "PUSH_VAKIF" to "VakıfBank Mobil ($pkg)"
+            resolvedBank == BankProvider.TOM_BANK -> "PUSH_TOM" to "TOM Bank Hadi ($pkg)"
+            else -> "PUSH_BANK" to pkg
+        }
+
+        val postedAt = sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis()
         val app = applicationContext as? HarcamaApp ?: return
+
         serviceScope.launch {
             app.repository.ingestIncomingMessage(
                 sourceChannel = channelLabel,
                 sourceTag = sourceTag,
+                bankHint = resolvedBank,
                 title = title,
                 body = body,
                 timestamp = postedAt
