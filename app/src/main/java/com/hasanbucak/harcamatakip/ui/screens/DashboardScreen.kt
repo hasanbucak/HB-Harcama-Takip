@@ -1140,21 +1140,29 @@ fun AddManualTransactionDialog(
         note: String
     ) -> Unit
 ) {
-    val firstCard = cards.firstOrNull()
+    val matchedInitialCard = remember(cards, initialBank, initialLast4) {
+        if (initialBank != null && !initialLast4.isNullOrBlank()) {
+            cards.find { it.bankCode == initialBank.code && it.last4 == initialLast4 }
+        } else if (initialBank == null && initialLast4 == null) {
+            cards.firstOrNull()
+        } else {
+            null
+        }
+    }
     var selectedBank by remember {
         mutableStateOf(
-            initialBank ?: firstCard?.let { BankProvider.fromCode(it.bankCode) } ?: BankProvider.YAPI_KREDI
+            initialBank ?: matchedInitialCard?.let { BankProvider.fromCode(it.bankCode) } ?: BankProvider.YAPI_KREDI
         )
     }
     var selectedCardType by remember {
         mutableStateOf(
-            initialCardType ?: firstCard?.let { DetectedCardType.fromCode(it.cardType) } ?: DetectedCardType.CREDIT
+            initialCardType ?: matchedInitialCard?.let { DetectedCardType.fromCode(it.cardType) } ?: DetectedCardType.CREDIT
         )
     }
     var selectedGroupId by remember {
-        mutableStateOf(initialGroupId ?: firstCard?.defaultGroupId)
+        mutableStateOf(initialGroupId ?: matchedInitialCard?.defaultGroupId)
     }
-    var cardLast4 by remember { mutableStateOf(initialLast4 ?: firstCard?.last4 ?: "") }
+    var cardLast4 by remember { mutableStateOf(initialLast4 ?: matchedInitialCard?.last4 ?: "") }
     var merchant by remember { mutableStateOf(initialMerchant) }
     var amountText by remember {
         mutableStateOf(
@@ -1313,9 +1321,14 @@ fun AddManualTransactionDialog(
                         modifier = Modifier.width(88.dp)
                     )
                 }
+                val isDateValid = isValidDateInput(dateText)
                 OutlinedTextField(
                     value = dateText,
-                    onValueChange = { dateText = it.take(16) },
+                    onValueChange = { dateText = it.take(10) },
+                    isError = !isDateValid,
+                    supportingText = if (!isDateValid) {
+                        { Text("Geçerli tarih girin: gg.aa.yyyy (ör: 10.11.2026)") }
+                    } else null,
                     label = { Text("Tarih (gg.aa.yyyy)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -1367,9 +1380,10 @@ fun AddManualTransactionDialog(
         },
         confirmButton = {
             Button(
+                enabled = isValidDateInput(dateText),
                 onClick = {
                     val parsedAmount = YkbTransactionParser.parseFlexibleAmount(amountText) ?: 0.0
-                    if (parsedAmount > 0.0) {
+                    if (parsedAmount > 0.0 && isValidDateInput(dateText)) {
                         val resolvedTs = parseUserDateOrFallback(dateText, initialTimestamp)
                         onSave(
                             selectedBank,
@@ -1399,9 +1413,27 @@ fun AddManualTransactionDialog(
     )
 }
 
+private val STRICT_DATE_REGEX = Regex("""^\d{2}\.\d{2}\.\d{4}$""")
+
+private fun isValidDateInput(input: String): Boolean {
+    val trimmed = input.trim()
+    if (!STRICT_DATE_REGEX.matches(trimmed)) return false
+    return try {
+        val fmt = SimpleDateFormat("dd.MM.yyyy", Locale.forLanguageTag("tr-TR")).apply {
+            isLenient = false
+        }
+        fmt.parse(trimmed) != null
+    } catch (_: Throwable) {
+        false
+    }
+}
+
 private fun parseUserDateOrFallback(input: String, fallbackMillis: Long): Long {
     val trimmed = input.trim()
     if (trimmed == Formatters.formatDateInput(fallbackMillis)) {
+        return fallbackMillis
+    }
+    if (!STRICT_DATE_REGEX.matches(trimmed)) {
         return fallbackMillis
     }
     return try {

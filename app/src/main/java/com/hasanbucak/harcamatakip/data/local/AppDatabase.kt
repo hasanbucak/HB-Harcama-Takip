@@ -170,6 +170,7 @@ abstract class AppDatabase : RoomDatabase() {
                         `normalizedMerchant` TEXT NOT NULL,
                         `amount` REAL NOT NULL,
                         `currency` TEXT NOT NULL,
+                        `secondaryAmountTl` REAL,
                         `category` TEXT NOT NULL,
                         `categoryManual` INTEGER NOT NULL,
                         `transactionType` TEXT NOT NULL,
@@ -188,7 +189,7 @@ abstract class AppDatabase : RoomDatabase() {
                     """
                     INSERT INTO `transactions_new` (
                         `id`, `uuid`, `cardKey`, `bankCode`, `bankName`, `cardLast4`, `cardType`,
-                        `groupId`, `groupManual`, `merchant`, `normalizedMerchant`, `amount`, `currency`,
+                        `groupId`, `groupManual`, `merchant`, `normalizedMerchant`, `amount`, `currency`, `secondaryAmountTl`,
                         `category`, `categoryManual`, `transactionType`, `installmentCount`, `source`,
                         `seenPackages`, `txClockMinute`, `isDemo`, `timestamp`, `rawText`, `note`
                     )
@@ -200,7 +201,7 @@ abstract class AppDatabase : RoomDatabase() {
                         CASE WHEN `cardLast4` = 'NAKIT' THEN 'Nakit' ELSE 'Yapı Kredi' END,
                         `cardLast4`,
                         CASE WHEN `cardLast4` = 'NAKIT' THEN 'CASH' ELSE 'CREDIT' END,
-                        NULL, 0, `merchant`, `normalizedMerchant`, `amount`, `currency`,
+                        NULL, 0, `merchant`, `normalizedMerchant`, `amount`, `currency`, NULL,
                         `category`, 0, `transactionType`, `installmentCount`, `source`,
                         '', NULL, 0, `timestamp`, `rawText`, `note`
                     FROM `transactions`
@@ -274,6 +275,7 @@ abstract class AppDatabase : RoomDatabase() {
                         `normalizedMerchant` TEXT NOT NULL,
                         `amount` REAL NOT NULL,
                         `currency` TEXT NOT NULL,
+                        `secondaryAmountTl` REAL,
                         `category` TEXT NOT NULL,
                         `categoryManual` INTEGER NOT NULL,
                         `transactionType` TEXT NOT NULL,
@@ -292,14 +294,14 @@ abstract class AppDatabase : RoomDatabase() {
                     """
                     INSERT INTO `transactions_new` (
                         `id`, `uuid`, `cardKey`, `bankCode`, `bankName`, `cardLast4`, `cardType`,
-                        `groupId`, `groupManual`, `merchant`, `normalizedMerchant`, `amount`, `currency`,
+                        `groupId`, `groupManual`, `merchant`, `normalizedMerchant`, `amount`, `currency`, `secondaryAmountTl`,
                         `category`, `categoryManual`, `transactionType`, `installmentCount`, `source`,
                         `seenPackages`, `txClockMinute`, `isDemo`, `timestamp`, `rawText`, `note`
                     )
                     SELECT
                         `id`, 'v2-' || `id` || '-' || `timestamp`,
                         `cardKey`, `bankCode`, `bankName`, `cardLast4`, `cardType`,
-                        NULL, 0, `merchant`, `normalizedMerchant`, `amount`, `currency`,
+                        NULL, 0, `merchant`, `normalizedMerchant`, `amount`, `currency`, NULL,
                         `category`, 0, `transactionType`, `installmentCount`, `source`,
                         '', NULL, 0, `timestamp`, `rawText`, `note`
                     FROM `transactions`

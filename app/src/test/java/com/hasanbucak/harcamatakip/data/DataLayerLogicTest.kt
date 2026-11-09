@@ -155,6 +155,38 @@ class DataLayerLogicTest {
             candidates = listOf(existingTlSms)
         )
         assertNotNull(match)
+
+        // Reverse order (Ö3): Dual-currency USD push arrived FIRST, TL SMS arrives SECOND!
+        val existingDualPush = sampleTxEntity(
+            amount = 19.99,
+            currency = "USD",
+            merchant = "STEAM",
+            normalizedMerchant = "STEAM",
+            seenPackages = "com.ykb.avm",
+            txClockMinute = null
+        ).copy(secondaryAmountTl = 712.00)
+
+        val incomingTlSms = ParsedTransaction(
+            bank = BankProvider.YAPI_KREDI,
+            cardLast4 = "4821",
+            detectedCardType = DetectedCardType.VIRTUAL,
+            merchant = "STEAM",
+            isGenericMerchant = false,
+            amount = 712.00,
+            currency = "TL",
+            secondaryAmountTl = null,
+            transactionType = ParsedTransactionType.EXPENSE,
+            installmentCount = 1,
+            txClockMinute = null
+        )
+
+        val reverseMatch = DeduplicationMatcher.findMergeTarget(
+            incoming = incomingTlSms,
+            sourcePackage = "com.google.android.apps.messaging",
+            timestamp = existingDualPush.timestamp + 60_000L,
+            candidates = listOf(existingDualPush)
+        )
+        assertNotNull(reverseMatch)
     }
 
     @Test
@@ -213,9 +245,13 @@ class DataLayerLogicTest {
     }
 
     @Test
-    fun messageFingerprintsDifferAcrossStackedSmsMessages() {
+    fun messageFingerprintsDifferAcrossStackedSmsAndIgnoreNotificationWhenJitter() {
         val f1 = MessageFingerprint.forMessagingStyle("com.google.android.apps.messaging", "YAPIKREDI", 1000L, "100 TL harcama")
         val f2 = MessageFingerprint.forMessagingStyle("com.google.android.apps.messaging", "YAPIKREDI", 2000L, "100 TL harcama")
         assertNotEquals(f1, f2)
+
+        val n1 = MessageFingerprint.forNotification("com.ykb.android", "key1", "Harcama", "100 TL harcama")
+        val n2 = MessageFingerprint.forNotification("com.ykb.android", "key1", "Harcama", "100 TL harcama")
+        assertEquals(n1, n2)
     }
 }

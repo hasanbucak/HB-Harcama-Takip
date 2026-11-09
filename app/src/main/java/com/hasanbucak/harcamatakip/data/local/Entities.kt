@@ -94,6 +94,7 @@ data class TransactionEntity(
     val normalizedMerchant: String,
     val amount: Double,
     val currency: String,
+    val secondaryAmountTl: Double? = null,
     val category: String,
     val categoryManual: Boolean = false,
     val transactionType: String, // EXPENSE, REFUND

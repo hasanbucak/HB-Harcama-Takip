@@ -20,15 +20,18 @@ object MessageFingerprint {
         return "msg|$pkg|$normSender|$msgTimestamp|$hash"
     }
 
+    /**
+     * Excludes notification.when jitter so reposted/updated notifications keep a stable key.
+     * TransactionRepository applies a 10-minute freshness window on live notif| fingerprints.
+     */
     fun forNotification(
         pkg: String,
         sbnKey: String,
-        whenTime: Long,
         title: String,
         body: String
     ): String {
         val hash = sha256Hex("${title.trim()}\n${body.trim()}").take(24)
-        return "notif|$pkg|$sbnKey|$whenTime|$hash"
+        return "notif|$pkg|$sbnKey|$hash"
     }
 
     fun forManualOrDemo(tag: String, timestamp: Long, body: String): String {
@@ -73,23 +76,24 @@ object DeduplicationMatcher {
                 .filter { it.isNotEmpty() }
             if (sourcePackage in seenList) return@filter false
 
-            // Amount check (including USD/EUR push <-> TL SMS dual-currency bridge)
+            // Bidirectional amount check (including USD/EUR push <-> TL SMS in EITHER arrival order!)
             val amountMatches = when {
                 cand.currency == incoming.currency && abs(cand.amount - incoming.amount) < 0.01 -> true
                 incoming.secondaryAmountTl != null &&
                     cand.currency == "TL" &&
                     abs(cand.amount - incoming.secondaryAmountTl) < 0.50 -> true
+                cand.secondaryAmountTl != null &&
+                    incoming.currency == "TL" &&
+                    abs(incoming.amount - cand.secondaryAmountTl) < 0.50 -> true
                 else -> false
             }
             if (!amountMatches) return@filter false
 
-            // Card compatibility check
             val cardCompatible = cand.cardLast4 == incoming.cardLast4 ||
                 cand.cardLast4 == "GENEL" ||
                 incoming.cardLast4 == "GENEL"
             if (!cardCompatible) return@filter false
 
-            // Clock minute & timestamp window check
             val timeCompatible = if (cand.txClockMinute != null && incoming.txClockMinute != null) {
                 val rawDiff = abs(cand.txClockMinute - incoming.txClockMinute)
                 val circularDiff = min(rawDiff, 1440 - rawDiff)
@@ -99,7 +103,6 @@ object DeduplicationMatcher {
             }
             if (!timeCompatible) return@filter false
 
-            // Merchant compatibility check
             merchantsCompatible(
                 candMerchant = cand.merchant,
                 candNormalized = cand.normalizedMerchant,
@@ -109,8 +112,6 @@ object DeduplicationMatcher {
         }
 
         if (matching.isEmpty()) return null
-
-        // If an incoming specific card matches multiple different GENEL records ambiguously, skip auto-merge
         if (matching.size > 1 && matching.all { it.cardLast4 == "GENEL" }) {
             return null
         }

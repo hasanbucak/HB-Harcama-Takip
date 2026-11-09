@@ -36,8 +36,8 @@ object PdfReportGenerator {
         groupsById: Map<String, CardGroupEntity>
     ): File {
         val doc = PdfDocument()
-
-        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        try {
+            val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.rgb(30, 58, 138)
             textSize = 16f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -226,8 +226,10 @@ object PdfReportGenerator {
         FileOutputStream(outFile).use { out ->
             doc.writeTo(out)
         }
-        doc.close()
         return outFile
+        } finally {
+            doc.close()
+        }
     }
 
     private fun truncate(text: String, maxChars: Int): String {

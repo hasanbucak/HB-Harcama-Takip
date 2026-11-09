@@ -27,16 +27,19 @@ class YkbNotificationListenerService : NotificationListenerService() {
         } ?: return
 
         for (sbn in activeList) {
-            processStatusBarNotification(sbn)
+            processStatusBarNotification(sbn, isReconnectScan = true)
         }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
-        processStatusBarNotification(sbn)
+        processStatusBarNotification(sbn, isReconnectScan = false)
     }
 
-    private fun processStatusBarNotification(sbn: StatusBarNotification) {
+    private fun processStatusBarNotification(
+        sbn: StatusBarNotification,
+        isReconnectScan: Boolean
+    ) {
         val pkg = sbn.packageName ?: return
         val directBank = YkbTransactionParser.resolveBankForPackage(pkg)
         val isMessagingApp = pkg in YkbTransactionParser.MESSAGING_PACKAGES
@@ -74,7 +77,8 @@ class YkbNotificationListenerService : NotificationListenerService() {
                             bankHint = bank,
                             title = item.sender,
                             body = item.body,
-                            timestamp = item.timestamp
+                            timestamp = item.timestamp,
+                            isReconnectScan = isReconnectScan
                         )
                     } catch (_: Throwable) {
                         // Isolate single message errors so service never crashes
@@ -99,11 +103,9 @@ class YkbNotificationListenerService : NotificationListenerService() {
         if (body.isBlank() && title.isBlank()) return
 
         val channelLabel = "${resolvedBank.displayName} ($pkg)"
-        val whenTime = notification.`when`.takeIf { it > 0L } ?: postedAt
         val fingerprint = MessageFingerprint.forNotification(
             pkg = pkg,
             sbnKey = sbn.key ?: pkg,
-            whenTime = whenTime,
             title = title,
             body = body
         )
@@ -120,7 +122,8 @@ class YkbNotificationListenerService : NotificationListenerService() {
                     bankHint = resolvedBank,
                     title = title,
                     body = body,
-                    timestamp = postedAt
+                    timestamp = postedAt,
+                    isReconnectScan = isReconnectScan
                 )
             } catch (_: Throwable) {
                 // Never allow uncaught DB/IO errors to terminate NotificationListenerService

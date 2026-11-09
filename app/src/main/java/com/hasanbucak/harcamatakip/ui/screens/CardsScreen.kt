@@ -332,8 +332,8 @@ fun CardsScreen(
     }
 
     if (showNewCardDialog) {
-        CardEditorDialog(
-            initial = CardEntity(
+        val newCardTemplate = remember {
+            CardEntity(
                 cardKey = "",
                 bankCode = BankProvider.YAPI_KREDI.code,
                 bankName = BankProvider.YAPI_KREDI.displayName,
@@ -342,8 +342,12 @@ fun CardsScreen(
                 cardType = DetectedCardType.CREDIT.name,
                 defaultGroupId = state.cardGroups.firstOrNull()?.groupId,
                 statementDay = 1,
-                colorHex = BankProvider.YAPI_KREDI.defaultColorHex
-            ),
+                colorHex = BankProvider.YAPI_KREDI.defaultColorHex,
+                createdAt = 0L
+            )
+        }
+        CardEditorDialog(
+            initial = newCardTemplate,
             groups = state.cardGroups,
             isNew = true,
             onDismiss = { showNewCardDialog = false },
@@ -512,19 +516,19 @@ private fun CardEditorDialog(
     onSave: (CardEntity, Boolean) -> Unit,
     onRequestDelete: (() -> Unit)?
 ) {
-    var selectedBank by remember(initial) {
+    var selectedBank by remember(initial.cardKey, isNew) {
         mutableStateOf(
             BankProvider.fromCode(initial.bankCode).let {
-                if (it == BankProvider.OTHER) BankProvider.YAPI_KREDI else it
+                if (isNew && it == BankProvider.OTHER) BankProvider.YAPI_KREDI else it
             }
         )
     }
-    var last4 by remember(initial) { mutableStateOf(initial.last4) }
-    var alias by remember(initial) { mutableStateOf(initial.alias) }
-    var cardType by remember(initial) { mutableStateOf(initial.cardType) }
-    var selectedGroupId by remember(initial) { mutableStateOf(initial.defaultGroupId) }
-    var applyGroupToPast by remember(initial) { mutableStateOf(false) }
-    var statementDayText by remember(initial) { mutableStateOf(initial.statementDay.toString()) }
+    var last4 by remember(initial.cardKey, isNew) { mutableStateOf(initial.last4) }
+    var alias by remember(initial.cardKey, isNew) { mutableStateOf(initial.alias) }
+    var cardType by remember(initial.cardKey, isNew) { mutableStateOf(initial.cardType) }
+    var selectedGroupId by remember(initial.cardKey, isNew) { mutableStateOf(initial.defaultGroupId) }
+    var applyGroupToPast by remember(initial.cardKey, isNew) { mutableStateOf(false) }
+    var statementDayText by remember(initial.cardKey, isNew) { mutableStateOf(initial.statementDay.toString()) }
 
     val colorChoices = listOf(
         0xFF1E3A8A,
@@ -673,17 +677,19 @@ private fun CardEditorDialog(
                     val cleanLast4 = last4.trim()
                     if (cleanLast4.isNotEmpty()) {
                         val day = (statementDayText.toIntOrNull() ?: 1).coerceIn(1, 31)
-                        val cleanAlias = alias.trim().ifEmpty { "${selectedBank.displayName} •••• $cleanLast4" }
+                        val effectiveBankCode = if (isNew) selectedBank.code else initial.bankCode
+                        val effectiveBankName = if (isNew) selectedBank.displayName else initial.bankName
+                        val cleanAlias = alias.trim().ifEmpty { "$effectiveBankName •••• $cleanLast4" }
                         val key = if (isNew) {
-                            CardEntity.buildKey(selectedBank.code, cleanLast4)
+                            CardEntity.buildKey(effectiveBankCode, cleanLast4)
                         } else {
                             initial.cardKey
                         }
                         onSave(
                             initial.copy(
                                 cardKey = key,
-                                bankCode = selectedBank.code,
-                                bankName = selectedBank.displayName,
+                                bankCode = effectiveBankCode,
+                                bankName = effectiveBankName,
                                 last4 = cleanLast4,
                                 alias = cleanAlias,
                                 cardType = cardType,

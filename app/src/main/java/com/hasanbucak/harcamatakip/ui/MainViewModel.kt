@@ -231,7 +231,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        val cardTotalsTl = txMatchingGroup
+        val cardTotalsTl = txInPeriod
             .filter { it.currency == "TL" }
             .groupBy { it.cardKey }
             .mapValues { (_, list) ->
@@ -240,37 +240,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-        // Bank breakdown reflects active Period + Group (before single-bank drilldown so user can switch banks easily)
-        val tlInGroup = txMatchingGroup.filter { it.currency == "TL" }
-        val rawBankItems = tlInGroup
-            .groupBy { it.bankCode }
-            .map { (bCode, list) ->
-                val gross = list.filter { it.transactionType == ParsedTransactionType.EXPENSE.name }.sumOf { it.amount }
-                val refund = list.filter { it.transactionType == ParsedTransactionType.REFUND.name }.sumOf { it.amount }
-                val net = gross - refund
-                val provider = BankProvider.fromCode(bCode)
-                BankBreakdownItem(
-                    bankCode = bCode,
-                    bankName = list.firstOrNull()?.bankName ?: provider.displayName,
-                    colorHex = provider.defaultColorHex,
-                    grossExpense = gross,
-                    totalRefund = refund,
-                    netExpense = net,
-                    ratio = 0f,
-                    count = list.size
-                )
-            }
-            .sortedByDescending { it.netExpense }
-
-        val positiveBankSum = rawBankItems.sumOf { it.netExpense.coerceAtLeast(0.0) }
-        val bankBreakdown = rawBankItems.map { item ->
-            val r = if (positiveBankSum > 0.0) {
-                (item.netExpense.coerceAtLeast(0.0) / positiveBankSum).toFloat().coerceIn(0f, 1f)
-            } else {
-                0f
-            }
-            item.copy(ratio = r)
-        }
+        // Bank breakdown reflects active Period + Group
+        val bankBreakdown = summarizeBanksTl(txMatchingGroup)
 
         // Apply Bank + Card + Search filters for Category breakdown
         val queryTrimmed = filter.searchQuery.trim()
@@ -286,34 +257,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             bankOk && cardOk && queryOk
         }
 
-        val tlForCategories = txBeforeCategoryFilter.filter { it.currency == "TL" }
-        val rawCategoryItems = tlForCategories
-            .groupBy { it.category }
-            .map { (cat, list) ->
-                val gross = list.filter { it.transactionType == ParsedTransactionType.EXPENSE.name }.sumOf { it.amount }
-                val refund = list.filter { it.transactionType == ParsedTransactionType.REFUND.name }.sumOf { it.amount }
-                val net = gross - refund
-                CategoryBreakdownItem(
-                    category = cat,
-                    grossExpense = gross,
-                    totalRefund = refund,
-                    amount = net,
-                    ratio = 0f,
-                    count = list.size
-                )
-            }
-            .filter { it.grossExpense > 0.0 || it.totalRefund > 0.0 }
-            .sortedByDescending { it.amount }
-
-        val positiveCatSum = rawCategoryItems.sumOf { it.amount.coerceAtLeast(0.0) }
-        val categoryBreakdown = rawCategoryItems.map { item ->
-            val r = if (positiveCatSum > 0.0) {
-                (item.amount.coerceAtLeast(0.0) / positiveCatSum).toFloat().coerceIn(0f, 1f)
-            } else {
-                0f
-            }
-            item.copy(ratio = r)
-        }
+        val categoryBreakdown = summarizeCategoriesTl(txBeforeCategoryFilter)
 
         val filtered = if (filter.category == null) {
             txBeforeCategoryFilter
@@ -321,23 +265,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             txBeforeCategoryFilter.filter { it.category == filter.category }
         }
 
-        val summaries = filtered
-            .groupBy { it.currency }
-            .map { (currency, list) ->
-                val gross = list
-                    .filter { it.transactionType == ParsedTransactionType.EXPENSE.name }
-                    .sumOf { it.amount }
-                val refund = list
-                    .filter { it.transactionType == ParsedTransactionType.REFUND.name }
-                    .sumOf { it.amount }
-                CurrencySummary(
-                    currency = currency,
-                    grossExpense = gross,
-                    totalRefund = refund,
-                    netExpense = gross - refund
-                )
-            }
-            .sortedBy { if (it.currency == "TL") 0 else 1 }
+        val summaries = summarizeCurrencies(filtered)
 
         val ruleMap = bundle.rules.associate {
             it.bankCode to UnknownCardPolicy.fromCode(it.unknownCardPolicy)
@@ -401,8 +329,89 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val start = startDate.atStartOfDay(zone).toInstant().toEpochMilli()
         val end = endDateExclusive.atStartOfDay(zone).toInstant().toEpochMilli()
-        val label = "$monthTitle Dönemi (${startDate.dayOfMonth}.${startDate.monthValue} - ${endDateExclusive.dayOfMonth}.${endDateExclusive.monthValue})"
+        val inclusiveEnd = endDateExclusive.minusDays(1)
+        val label = "$monthTitle Dönemi (${startDate.dayOfMonth}.${startDate.monthValue} - ${inclusiveEnd.dayOfMonth}.${inclusiveEnd.monthValue})"
         return Triple(start, end, label)
+    }
+
+    private fun summarizeCurrencies(transactions: List<TransactionEntity>): List<CurrencySummary> {
+        return transactions
+            .groupBy { it.currency }
+            .map { (currency, list) ->
+                val gross = list.filter { it.transactionType == ParsedTransactionType.EXPENSE.name }.sumOf { it.amount }
+                val refund = list.filter { it.transactionType == ParsedTransactionType.REFUND.name }.sumOf { it.amount }
+                CurrencySummary(
+                    currency = currency,
+                    grossExpense = gross,
+                    totalRefund = refund,
+                    netExpense = gross - refund
+                )
+            }
+            .sortedBy { if (it.currency == "TL") 0 else 1 }
+    }
+
+    private fun summarizeBanksTl(transactions: List<TransactionEntity>): List<BankBreakdownItem> {
+        val raw = transactions
+            .filter { it.currency == "TL" }
+            .groupBy { it.bankCode }
+            .map { (bCode, list) ->
+                val gross = list.filter { it.transactionType == ParsedTransactionType.EXPENSE.name }.sumOf { it.amount }
+                val refund = list.filter { it.transactionType == ParsedTransactionType.REFUND.name }.sumOf { it.amount }
+                val net = gross - refund
+                val provider = BankProvider.fromCode(bCode)
+                BankBreakdownItem(
+                    bankCode = bCode,
+                    bankName = list.firstOrNull()?.bankName ?: provider.displayName,
+                    colorHex = provider.defaultColorHex,
+                    grossExpense = gross,
+                    totalRefund = refund,
+                    netExpense = net,
+                    ratio = 0f,
+                    count = list.size
+                )
+            }
+            .sortedByDescending { it.netExpense }
+
+        val positiveSum = raw.sumOf { it.netExpense.coerceAtLeast(0.0) }
+        return raw.map { item ->
+            val r = if (positiveSum > 0.0) {
+                (item.netExpense.coerceAtLeast(0.0) / positiveSum).toFloat().coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+            item.copy(ratio = r)
+        }
+    }
+
+    private fun summarizeCategoriesTl(transactions: List<TransactionEntity>): List<CategoryBreakdownItem> {
+        val raw = transactions
+            .filter { it.currency == "TL" }
+            .groupBy { it.category }
+            .map { (cat, list) ->
+                val gross = list.filter { it.transactionType == ParsedTransactionType.EXPENSE.name }.sumOf { it.amount }
+                val refund = list.filter { it.transactionType == ParsedTransactionType.REFUND.name }.sumOf { it.amount }
+                val net = gross - refund
+                CategoryBreakdownItem(
+                    category = cat,
+                    grossExpense = gross,
+                    totalRefund = refund,
+                    amount = net,
+                    ratio = 0f,
+                    count = list.size
+                )
+            }
+            .filter { it.grossExpense > 0.0 || it.totalRefund > 0.0 }
+            .sortedByDescending { it.amount }
+
+        val positiveSum = raw.sumOf { it.amount.coerceAtLeast(0.0) }
+        return raw.map { item ->
+            val r = if (positiveSum > 0.0) {
+                (item.amount.coerceAtLeast(0.0) / positiveSum).toFloat().coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+            item.copy(ratio = r)
+        }
     }
 
     fun clearFeedback() {
@@ -697,62 +706,74 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun exportCsvAndShare(context: Context, onlyFilteredScope: Boolean = true) {
         viewModelScope.launch {
-            val state = uiState.value
-            val (_, slug) = currentScopeSlug(state)
-            val listToExport = if (onlyFilteredScope) {
-                state.filteredTransactions.filter { !it.isDemo }
-            } else {
-                null
+            try {
+                val state = uiState.value
+                val (_, slug) = currentScopeSlug(state)
+                val listToExport = if (onlyFilteredScope) {
+                    state.filteredTransactions.filter { !it.isDemo }
+                } else {
+                    null
+                }
+                val csvContent = withContext(Dispatchers.IO) {
+                    repository.buildCsvExport(listToExport)
+                }
+                val file = withContext(Dispatchers.IO) {
+                    val exportDir = prepareExportDir(context)
+                    val outFile = File(exportDir, "harcamalar_${slug}_${state.selectedMonth}.csv")
+                    outFile.writeText("\uFEFF" + csvContent, Charsets.UTF_8)
+                    outFile
+                }
+                shareFileViaProvider(
+                    context = context,
+                    file = file,
+                    mimeType = "text/csv",
+                    subject = "Harcama Dökümü (CSV)",
+                    chooserTitle = "CSV Dökümünü Paylaş / Kaydet"
+                )
+            } catch (e: Throwable) {
+                feedbackFlow.value = "CSV oluşturma hatası: ${e.message}"
             }
-            val csvContent = withContext(Dispatchers.IO) {
-                repository.buildCsvExport(listToExport)
-            }
-            val file = withContext(Dispatchers.IO) {
-                val exportDir = prepareExportDir(context)
-                val outFile = File(exportDir, "harcamalar_${slug}_${state.selectedMonth}.csv")
-                outFile.writeText("\uFEFF" + csvContent, Charsets.UTF_8)
-                outFile
-            }
-            shareFileViaProvider(
-                context = context,
-                file = file,
-                mimeType = "text/csv",
-                subject = "Harcama Dökümü (CSV)",
-                chooserTitle = "CSV Dökümünü Paylaş / Kaydet"
-            )
         }
     }
 
     fun exportPdfAndShare(context: Context) {
         viewModelScope.launch {
-            val state = uiState.value
-            val (scopeSubtitle, slug) = currentScopeSlug(state)
-            val nonDemoTx = state.filteredTransactions.filter { !it.isDemo }
-            val cardsByKey = state.cards.associateBy { it.cardKey }
-            val groupsById = state.cardGroups.associateBy { it.groupId }
+            try {
+                val state = uiState.value
+                val (scopeSubtitle, slug) = currentScopeSlug(state)
+                // Compute summaries strictly from nonDemoTx so demo records never leak into PDF totals!
+                val nonDemoTx = state.filteredTransactions.filter { !it.isDemo }
+                val pdfCurrencies = summarizeCurrencies(nonDemoTx)
+                val pdfBanks = summarizeBanksTl(nonDemoTx)
+                val pdfCategories = summarizeCategoriesTl(nonDemoTx)
+                val cardsByKey = state.cards.associateBy { it.cardKey }
+                val groupsById = state.cardGroups.associateBy { it.groupId }
 
-            val file = withContext(Dispatchers.IO) {
-                val exportDir = prepareExportDir(context)
-                val outFile = File(exportDir, "harcama_raporu_${slug}_${state.selectedMonth}.pdf")
-                PdfReportGenerator.generateReportFile(
-                    outFile = outFile,
-                    reportTitle = "HB Harcama Takip — Dönem Raporu",
-                    scopeSubtitle = scopeSubtitle,
-                    currencySummaries = state.currencySummaries,
-                    bankBreakdown = state.tlBankBreakdown,
-                    categoryBreakdown = state.tlCategoryBreakdown,
-                    transactions = nonDemoTx,
-                    cardsByKey = cardsByKey,
-                    groupsById = groupsById
+                val file = withContext(Dispatchers.IO) {
+                    val exportDir = prepareExportDir(context)
+                    val outFile = File(exportDir, "harcama_raporu_${slug}_${state.selectedMonth}.pdf")
+                    PdfReportGenerator.generateReportFile(
+                        outFile = outFile,
+                        reportTitle = "HB Harcama Takip — Dönem Raporu",
+                        scopeSubtitle = scopeSubtitle,
+                        currencySummaries = pdfCurrencies,
+                        bankBreakdown = pdfBanks,
+                        categoryBreakdown = pdfCategories,
+                        transactions = nonDemoTx,
+                        cardsByKey = cardsByKey,
+                        groupsById = groupsById
+                    )
+                }
+                shareFileViaProvider(
+                    context = context,
+                    file = file,
+                    mimeType = "application/pdf",
+                    subject = "Harcama Dönem Raporu (PDF)",
+                    chooserTitle = "PDF Raporunu Paylaş / Kaydet"
                 )
+            } catch (e: Throwable) {
+                feedbackFlow.value = "PDF oluşturma hatası: ${e.message}"
             }
-            shareFileViaProvider(
-                context = context,
-                file = file,
-                mimeType = "application/pdf",
-                subject = "Harcama Dönem Raporu (PDF)",
-                chooserTitle = "PDF Raporunu Paylaş / Kaydet"
-            )
         }
     }
 

@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
+import kotlin.math.abs
 
 sealed class IngestResult {
     data class Saved(val transaction: ParsedTransaction, val cardAlias: String) : IngestResult()
@@ -45,6 +46,7 @@ class TransactionRepository(private val db: AppDatabase) {
     companion object {
         private const val PROCESSED_TTL_MS = 60L * 24 * 60 * 60 * 1000L
         private const val RAW_TEXT_TTL_MS = 30L * 24 * 60 * 60 * 1000L
+        private const val NOTIF_REPOST_FRESHNESS_MS = 10L * 60 * 1000L
 
         private val CARD_COLOR_PALETTE: List<Long> = listOf(
             0xFF1E3A8A,
@@ -64,6 +66,7 @@ class TransactionRepository(private val db: AppDatabase) {
             db.processedMessageDao().pruneOlderThan(now - PROCESSED_TTL_MS)
             db.pendingReviewDao().pruneResolvedOlderThan(now - RAW_TEXT_TTL_MS)
             db.transactionDao().scrubOldRawTexts(now - RAW_TEXT_TTL_MS)
+            db.rawLogDao().pruneOlderThan(now - RAW_TEXT_TTL_MS)
             db.rawLogDao().pruneOldLogs()
         }
     }
@@ -77,7 +80,8 @@ class TransactionRepository(private val db: AppDatabase) {
         title: String?,
         body: String?,
         timestamp: Long = System.currentTimeMillis(),
-        isDemo: Boolean = false
+        isDemo: Boolean = false,
+        isReconnectScan: Boolean = false
     ): IngestResult = ingestMutex.withLock {
         val computedFingerprint = fingerprint ?: MessageFingerprint.forManualOrDemo(
             tag = sourcePackage,
@@ -92,21 +96,27 @@ class TransactionRepository(private val db: AppDatabase) {
         )
 
         db.withTransaction {
-            // 1. Fingerprint check prevents re-processing on listener reconnect or notification updates
             if (!isDemo) {
                 val alreadySeen = db.processedMessageDao().find(computedFingerprint)
                 if (alreadySeen != null) {
-                    return@withTransaction IngestResult.AlreadyProcessed(
-                        "Bu bildirim daha önce işlendi (${alreadySeen.outcome})"
-                    )
+                    val isNotifKey = computedFingerprint.startsWith("notif|")
+                    val withinFreshness = abs(timestamp - alreadySeen.firstSeenAt) <= NOTIF_REPOST_FRESHNESS_MS
+                    if (isReconnectScan || !isNotifKey || withinFreshness) {
+                        return@withTransaction IngestResult.AlreadyProcessed(
+                            "Bu bildirim daha önce işlendi (${alreadySeen.outcome})"
+                        )
+                    }
                 }
             }
 
             when (outcome) {
                 is ParseOutcome.Ignored -> {
-                    // Zero-retention for OTP/security prompts: never write secret text to SQLite
-                    val safeTitle = if (outcome.isSensitiveOtp) "Güvenlik Bildirimi" else YkbTransactionParser.sanitizeForLog(title?.trim().orEmpty())
-                    val safeBody = if (outcome.isSensitiveOtp) "[OTP / Güvenlik kodu — içerik kaydedilmedi]" else YkbTransactionParser.sanitizeForLog(body?.trim().orEmpty())
+                    // Privacy data minimization: never persist personal/OTP/promo body on IGNORED entries
+                    val safeTitle = if (outcome.isSensitiveOtp) {
+                        "Güvenlik Bildirimi"
+                    } else {
+                        YkbTransactionParser.sanitizeForLog(title?.trim().orEmpty()).take(48)
+                    }
 
                     if (!isDemo) {
                         db.processedMessageDao().upsert(
@@ -123,7 +133,7 @@ class TransactionRepository(private val db: AppDatabase) {
                         RawNotificationLogEntity(
                             sourceChannel = sourceChannel,
                             title = safeTitle,
-                            body = safeBody,
+                            body = "",
                             status = "IGNORED",
                             detail = outcome.reason,
                             timestamp = timestamp
@@ -188,7 +198,6 @@ class TransactionRepository(private val db: AppDatabase) {
                     val safeBody = YkbTransactionParser.sanitizeForLog(body?.trim().orEmpty())
                     val parsed = outcome.transaction
 
-                    // Demo simulations never pollute real cards or real totals
                     if (isDemo) {
                         val demoKey = CardEntity.buildKey(parsed.bank.code, parsed.cardLast4)
                         val existingCard = db.cardDao().getCard(demoKey)
@@ -208,6 +217,7 @@ class TransactionRepository(private val db: AppDatabase) {
                                 normalizedMerchant = CategoryClassifier.normalizeMerchantKey(parsed.merchant),
                                 amount = parsed.amount,
                                 currency = parsed.currency,
+                                secondaryAmountTl = parsed.secondaryAmountTl,
                                 category = category,
                                 categoryManual = false,
                                 transactionType = parsed.transactionType.name,
@@ -234,7 +244,35 @@ class TransactionRepository(private val db: AppDatabase) {
                         return@withTransaction IngestResult.Saved(parsed, existingCard?.alias ?: "${parsed.bank.displayName} •••• ${parsed.cardLast4}")
                     }
 
-                    // 2. Check cross-package deduplication & card/merchant enrichment BEFORE card creation
+                    // Check blocked card FIRST (including GENEL!) so blocked cards never merge into GENEL or re-open!
+                    val cardKey = CardEntity.buildKey(parsed.bank.code, parsed.cardLast4)
+                    val existingCard = db.cardDao().getCard(cardKey)
+                    if (existingCard != null && existingCard.isBlocked) {
+                        val reason = "Engellenmiş kart (${parsed.bank.displayName} •••• ${parsed.cardLast4}) atlandı"
+                        db.processedMessageDao().upsert(
+                            ProcessedMessageEntity(
+                                fingerprint = computedFingerprint,
+                                sourcePackage = sourcePackage,
+                                outcome = "IGNORED",
+                                txUuid = null,
+                                firstSeenAt = timestamp
+                            )
+                        )
+                        db.rawLogDao().insert(
+                            RawNotificationLogEntity(
+                                sourceChannel = sourceChannel,
+                                title = safeTitle.take(48),
+                                body = "",
+                                status = "IGNORED",
+                                detail = reason,
+                                timestamp = timestamp
+                            )
+                        )
+                        db.rawLogDao().pruneOldLogs()
+                        return@withTransaction IngestResult.Ignored(reason)
+                    }
+
+                    // Cross-package deduplication & card/merchant enrichment
                     val windowHalf = DeduplicationMatcher.CLOCK_MATCH_EXTENDED_WINDOW_MS
                     val candidates = db.transactionDao().findCandidatesInWindow(
                         bankCode = parsed.bank.code,
@@ -275,39 +313,6 @@ class TransactionRepository(private val db: AppDatabase) {
                         return@withTransaction IngestResult.MergedDuplicate(
                             "${parsed.bank.displayName} (${enriched.cardLast4}) işlemi mevcut kayıtla birleştirildi"
                         )
-                    }
-
-                    // 3. Apply Card & UnknownCardPolicy rules
-                    val cardKey = CardEntity.buildKey(parsed.bank.code, parsed.cardLast4)
-                    val existingCard = if (parsed.cardLast4 != "GENEL") {
-                        db.cardDao().getCard(cardKey)
-                    } else {
-                        null
-                    }
-
-                    if (existingCard != null && existingCard.isBlocked) {
-                        val reason = "Engellenmiş kart (${parsed.bank.displayName} •••• ${parsed.cardLast4}) atlandı"
-                        db.processedMessageDao().upsert(
-                            ProcessedMessageEntity(
-                                fingerprint = computedFingerprint,
-                                sourcePackage = sourcePackage,
-                                outcome = "IGNORED",
-                                txUuid = null,
-                                firstSeenAt = timestamp
-                            )
-                        )
-                        db.rawLogDao().insert(
-                            RawNotificationLogEntity(
-                                sourceChannel = sourceChannel,
-                                title = safeTitle,
-                                body = safeBody,
-                                status = "IGNORED",
-                                detail = reason,
-                                timestamp = timestamp
-                            )
-                        )
-                        db.rawLogDao().pruneOldLogs()
-                        return@withTransaction IngestResult.Ignored(reason)
                     }
 
                     val rule = db.bankRuleDao().getRule(parsed.bank.code)
@@ -353,8 +358,8 @@ class TransactionRepository(private val db: AppDatabase) {
                             db.rawLogDao().insert(
                                 RawNotificationLogEntity(
                                     sourceChannel = sourceChannel,
-                                    title = safeTitle,
-                                    body = safeBody,
+                                    title = safeTitle.take(48),
+                                    body = "",
                                     status = "IGNORED",
                                     detail = reason,
                                     timestamp = timestamp
@@ -380,7 +385,6 @@ class TransactionRepository(private val db: AppDatabase) {
                         }
                     }
 
-                    // 4. Persist verified transaction with card's defaultGroupId snapshot
                     val txUuid = UUID.randomUUID().toString()
                     val normalizedMerchant = CategoryClassifier.normalizeMerchantKey(parsed.merchant)
                     val savedRuleCategory = if (!parsed.isGenericMerchant && normalizedMerchant.isNotEmpty()) {
@@ -405,6 +409,7 @@ class TransactionRepository(private val db: AppDatabase) {
                             normalizedMerchant = normalizedMerchant,
                             amount = parsed.amount,
                             currency = parsed.currency,
+                            secondaryAmountTl = parsed.secondaryAmountTl,
                             category = finalCategory,
                             categoryManual = false,
                             transactionType = parsed.transactionType.name,
@@ -464,27 +469,38 @@ class TransactionRepository(private val db: AppDatabase) {
                 firstSeenAt = timestamp
             )
         )
-        db.pendingReviewDao().insert(
-            PendingReviewEntity(
-                fingerprint = fingerprint,
-                sourceChannel = sourceChannel,
-                sourcePackage = sourcePackage,
-                bankCode = parsed.bank.code,
-                cardLast4 = parsed.cardLast4,
-                detectedCardType = parsed.detectedCardType.name,
-                merchant = parsed.merchant,
-                amount = parsed.amount,
-                currency = parsed.currency,
-                transactionType = parsed.transactionType.name,
-                installmentCount = parsed.installmentCount,
-                txClockMinute = parsed.txClockMinute,
-                reasonType = "PENDING_CARD",
-                reasonDetail = reasonDetail,
-                title = safeTitle,
-                body = safeBody,
-                timestamp = timestamp
-            )
+
+        // Avoid creating duplicate pending cards when both Push and SMS arrive before user approves!
+        val existingPending = db.pendingReviewDao().findSimilarUnresolved(
+            bankCode = parsed.bank.code,
+            amount = parsed.amount,
+            currency = parsed.currency,
+            minTs = timestamp - DeduplicationMatcher.STANDARD_WINDOW_MS,
+            maxTs = timestamp + DeduplicationMatcher.STANDARD_WINDOW_MS
         )
+        if (existingPending == null) {
+            db.pendingReviewDao().insert(
+                PendingReviewEntity(
+                    fingerprint = fingerprint,
+                    sourceChannel = sourceChannel,
+                    sourcePackage = sourcePackage,
+                    bankCode = parsed.bank.code,
+                    cardLast4 = parsed.cardLast4,
+                    detectedCardType = parsed.detectedCardType.name,
+                    merchant = parsed.merchant,
+                    amount = parsed.amount,
+                    currency = parsed.currency,
+                    transactionType = parsed.transactionType.name,
+                    installmentCount = parsed.installmentCount,
+                    txClockMinute = parsed.txClockMinute,
+                    reasonType = "PENDING_CARD",
+                    reasonDetail = reasonDetail,
+                    title = safeTitle,
+                    body = safeBody,
+                    timestamp = timestamp
+                )
+            )
+        }
         db.rawLogDao().insert(
             RawNotificationLogEntity(
                 sourceChannel = sourceChannel,
@@ -512,16 +528,18 @@ class TransactionRepository(private val db: AppDatabase) {
         var updatedCardType = existing.cardType
         var updatedGroupId = existing.groupId
 
-        // If earlier record was GENEL and incoming message carries specific last4, enrich card + group snapshot!
         if (existing.cardLast4 == "GENEL" && incoming.cardLast4 != "GENEL") {
             val specificKey = CardEntity.buildKey(incoming.bank.code, incoming.cardLast4)
-            val specificCard = db.cardDao().getCard(specificKey)
-                ?: if (UnknownCardPolicy.fromCode(db.bankRuleDao().getRule(incoming.bank.code)?.unknownCardPolicy) == UnknownCardPolicy.AUTO_ADD) {
+            val existingSpecific = db.cardDao().getCard(specificKey)
+            val specificCard = when {
+                existingSpecific != null && !existingSpecific.isBlocked -> existingSpecific
+                existingSpecific == null &&
+                    UnknownCardPolicy.fromCode(db.bankRuleDao().getRule(incoming.bank.code)?.unknownCardPolicy) == UnknownCardPolicy.AUTO_ADD -> {
                     ensureCardExists(incoming.bank, incoming.cardLast4, incoming.detectedCardType)
-                } else {
-                    null
                 }
-            if (specificCard != null && !specificCard.isBlocked) {
+                else -> null
+            }
+            if (specificCard != null) {
                 updatedCardKey = specificCard.cardKey
                 updatedLast4 = specificCard.last4
                 updatedCardType = specificCard.cardType
@@ -539,7 +557,6 @@ class TransactionRepository(private val db: AppDatabase) {
         }
         val updatedNormalized = CategoryClassifier.normalizeMerchantKey(updatedMerchant)
 
-        // Never overwrite a category that the user manually edited
         val updatedCategory = if (!existing.categoryManual && existingIsGeneric && !incoming.isGenericMerchant) {
             db.merchantRuleDao().findCategory(updatedNormalized) ?: CategoryClassifier.classify(updatedMerchant)
         } else {
@@ -553,6 +570,7 @@ class TransactionRepository(private val db: AppDatabase) {
             groupId = updatedGroupId,
             merchant = updatedMerchant,
             normalizedMerchant = updatedNormalized,
+            secondaryAmountTl = existing.secondaryAmountTl ?: incoming.secondaryAmountTl,
             category = updatedCategory,
             seenPackages = updatedSeen,
             txClockMinute = existing.txClockMinute ?: incoming.txClockMinute
@@ -563,11 +581,22 @@ class TransactionRepository(private val db: AppDatabase) {
         bank: BankProvider,
         last4: String,
         detectedType: DetectedCardType,
-        defaultGroupId: String? = null
+        defaultGroupId: String? = null,
+        unblockIfBlocked: Boolean = false
     ): CardEntity {
         val cardKey = CardEntity.buildKey(bank.code, last4)
         val existing = db.cardDao().getCard(cardKey)
-        if (existing != null && !existing.isBlocked) return existing
+        if (existing != null) {
+            if (!existing.isBlocked) return existing
+            if (unblockIfBlocked) {
+                val restored = existing.copy(
+                    isBlocked = false,
+                    defaultGroupId = defaultGroupId ?: existing.defaultGroupId
+                )
+                db.cardDao().upsert(restored)
+                return restored
+            }
+        }
 
         val count = db.cardDao().countActiveCards()
         val color = if (bank == BankProvider.YAPI_KREDI) {
@@ -615,45 +644,88 @@ class TransactionRepository(private val db: AppDatabase) {
     ) {
         db.withTransaction {
             val item = db.pendingReviewDao().getById(pendingId) ?: return@withTransaction
+            if (item.resolved) return@withTransaction
+
             val cleanLast4 = targetLast4.trim().ifEmpty { "GENEL" }
-            val card = ensureCardExists(targetBank, cleanLast4, targetCardType, targetGroupId)
+            val card = ensureCardExists(
+                bank = targetBank,
+                last4 = cleanLast4,
+                detectedType = targetCardType,
+                defaultGroupId = targetGroupId,
+                unblockIfBlocked = true
+            )
             val cleanMerchant = merchant.trim().ifEmpty { "${targetBank.displayName} İşlemi" }
             val norm = CategoryClassifier.normalizeMerchantKey(cleanMerchant)
-            val txUuid = UUID.randomUUID().toString()
+            val txType = if (isRefund) ParsedTransactionType.REFUND else ParsedTransactionType.EXPENSE
 
-            db.transactionDao().insert(
-                TransactionEntity(
-                    uuid = txUuid,
-                    cardKey = card.cardKey,
-                    bankCode = card.bankCode,
-                    bankName = card.bankName,
-                    cardLast4 = card.last4,
-                    cardType = card.cardType,
-                    groupId = targetGroupId ?: card.defaultGroupId,
-                    groupManual = targetGroupId != null && targetGroupId != card.defaultGroupId,
-                    merchant = cleanMerchant,
-                    normalizedMerchant = norm,
-                    amount = amount,
-                    currency = currency,
-                    category = category,
-                    categoryManual = true,
-                    transactionType = if (isRefund) ParsedTransactionType.REFUND.name else ParsedTransactionType.EXPENSE.name,
-                    installmentCount = installmentCount.coerceIn(1, 36),
-                    source = item.sourcePackage,
-                    seenPackages = item.sourcePackage,
-                    txClockMinute = item.txClockMinute,
-                    isDemo = false,
-                    timestamp = item.timestamp,
-                    rawText = if (item.title.isNotEmpty()) "${item.title}\n${item.body}" else item.body
-                )
+            val syntheticParsed = ParsedTransaction(
+                bank = targetBank,
+                cardLast4 = card.last4,
+                detectedCardType = targetCardType,
+                merchant = cleanMerchant,
+                isGenericMerchant = cleanMerchant.endsWith(" İşlemi"),
+                amount = amount,
+                currency = currency,
+                transactionType = txType,
+                installmentCount = installmentCount.coerceIn(1, 36),
+                txClockMinute = item.txClockMinute
             )
+            val candidates = db.transactionDao().findCandidatesInWindow(
+                bankCode = targetBank.code,
+                transactionType = txType.name,
+                minTimestamp = item.timestamp - DeduplicationMatcher.CLOCK_MATCH_EXTENDED_WINDOW_MS,
+                maxTimestamp = item.timestamp + DeduplicationMatcher.CLOCK_MATCH_EXTENDED_WINDOW_MS
+            )
+            val mergeTarget = DeduplicationMatcher.findMergeTarget(
+                incoming = syntheticParsed,
+                sourcePackage = item.sourcePackage,
+                timestamp = item.timestamp,
+                candidates = candidates
+            )
+
+            val resultUuid: String
+            if (mergeTarget != null) {
+                val enriched = enrichMergedTransaction(mergeTarget, syntheticParsed, item.sourcePackage)
+                db.transactionDao().update(enriched)
+                resultUuid = enriched.uuid
+            } else {
+                resultUuid = UUID.randomUUID().toString()
+                // Respect explicit "Bölümsüz" (null) selection in the dialog
+                db.transactionDao().insert(
+                    TransactionEntity(
+                        uuid = resultUuid,
+                        cardKey = card.cardKey,
+                        bankCode = card.bankCode,
+                        bankName = card.bankName,
+                        cardLast4 = card.last4,
+                        cardType = card.cardType,
+                        groupId = targetGroupId,
+                        groupManual = targetGroupId != card.defaultGroupId,
+                        merchant = cleanMerchant,
+                        normalizedMerchant = norm,
+                        amount = amount,
+                        currency = currency,
+                        category = category,
+                        categoryManual = true,
+                        transactionType = txType.name,
+                        installmentCount = installmentCount.coerceIn(1, 36),
+                        source = item.sourcePackage,
+                        seenPackages = item.sourcePackage,
+                        txClockMinute = item.txClockMinute,
+                        isDemo = false,
+                        timestamp = item.timestamp,
+                        rawText = if (item.title.isNotEmpty()) "${item.title}\n${item.body}" else item.body
+                    )
+                )
+            }
+
             db.pendingReviewDao().markResolved(pendingId)
             db.processedMessageDao().upsert(
                 ProcessedMessageEntity(
                     fingerprint = item.fingerprint,
                     sourcePackage = item.sourcePackage,
                     outcome = "SAVED",
-                    txUuid = txUuid,
+                    txUuid = resultUuid,
                     firstSeenAt = item.timestamp
                 )
             )
@@ -712,12 +784,18 @@ class TransactionRepository(private val db: AppDatabase) {
                 if (cardType == DetectedCardType.CASH) "NAKIT" else "GENEL"
             }
             val effectiveBank = if (cardType == DetectedCardType.CASH) BankProvider.OTHER else bank
-            val card = ensureCardExists(effectiveBank, cleanLast4, cardType, groupId)
+            val card = ensureCardExists(
+                bank = effectiveBank,
+                last4 = cleanLast4,
+                detectedType = cardType,
+                defaultGroupId = groupId,
+                unblockIfBlocked = true
+            )
 
             val cleanMerchant = merchant.trim().ifEmpty { "Genel Harcama" }
             val normalized = CategoryClassifier.normalizeMerchantKey(cleanMerchant)
-            val effectiveGroupId = groupId ?: card.defaultGroupId
 
+            // Respect user's exact group choice in dialog (null = Bölümsüz)
             db.transactionDao().insert(
                 TransactionEntity(
                     uuid = UUID.randomUUID().toString(),
@@ -726,8 +804,8 @@ class TransactionRepository(private val db: AppDatabase) {
                     bankName = if (cardType == DetectedCardType.CASH) "Nakit" else card.bankName,
                     cardLast4 = card.last4,
                     cardType = cardType.name,
-                    groupId = effectiveGroupId,
-                    groupManual = groupId != null && groupId != card.defaultGroupId,
+                    groupId = groupId,
+                    groupManual = groupId != card.defaultGroupId,
                     merchant = cleanMerchant,
                     normalizedMerchant = normalized,
                     amount = amount,
@@ -752,6 +830,7 @@ class TransactionRepository(private val db: AppDatabase) {
                     status = "SAVED",
                     detail = "Elle harcamaya dönüştürüldü ($amount $currency)"
                 )
+                db.pendingReviewDao().markResolvedByTimestampAndBody(timestamp, rawText)
             }
         }
     }
@@ -825,7 +904,6 @@ class TransactionRepository(private val db: AppDatabase) {
                 db.transactionDao().deleteByCardKey(cardKey)
             }
             if (existing != null) {
-                // Keep blocked tombstone so AUTO_ADD does not silently recreate deleted card
                 db.cardDao().upsert(existing.copy(isBlocked = true))
             }
         }

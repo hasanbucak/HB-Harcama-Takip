@@ -29,8 +29,9 @@
 
     <h2>2. Veri Minimizasyonu ve Güvenlik (OTP Koruması)</h2>
     <ul>
-        <li>Tek kullanımlık şifre (OTP), 3D Secure doğrulama kodu ve mobil giriş şifresi bildirimleri harcama olarak işlenmez ve ham içerikleri veritabanına kaydedilmez.</li>
-        <li>Tüm kayıtlar yalnızca cihazın uygulama içi yerel SQLite (Room) veritabanında tutulur; otomatik bulut yedeklemesi (<code>allowBackup="false"</code>) kapalıdır.</li>
+        <li>Tek kullanımlık şifre (OTP), 3D Secure doğrulama kodu ve harcama olmayan mesajların gövde içerikleri veritabanına kaydedilmez.</li>
+        <li>Ham bildirim metinleri ve günlük kayıtları (kullanıcının onayını bekleyen çözülmemiş kayıtlar hariç) 30 gün sonra otomatik olarak silinir.</li>
+        <li>Tüm kayıtlar yalnızca cihazın uygulama içi yerel SQLite (Room) veritabanında tutulur; otomatik bulut yedeklemesi ve cihaz aktarımı (<code>allowBackup="false"</code>, <code>dataExtractionRules</code>) kapalıdır.</li>
         <li>CSV, PDF veya JSON dışa aktarma işlemleri yalnızca kullanıcının kendi başlatacağı sistem paylaşım/dosya kaydetme ekranı üzerinden gerçekleşir.</li>
     </ul>
 

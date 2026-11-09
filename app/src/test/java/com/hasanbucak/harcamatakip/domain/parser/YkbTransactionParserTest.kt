@@ -343,4 +343,84 @@ class YkbTransactionParserTest {
         assertEquals(CategoryClassifier.OTHER, CategoryClassifier.classify("BASKI MERKEZİ"))
         assertEquals(CategoryClassifier.BILLS_SUBSCRIPTION, CategoryClassifier.classify("ASKİ GENEL MÜDÜRLÜĞÜ"))
     }
+
+    @Test
+    fun auditRegressionK1ToK4AndSentenceLevelRules() {
+        // K1: "5.000,00 TL 3 taksitle" must NEVER read "TL 3" as 3.00 TL!
+        val k1 = YkbTransactionParser.parse(
+            title = "Yapı Kredi",
+            body = "4543****4821 nolu kartınızla TRENDYOL işyerinden 5.000,00 TL 3 taksitle harcama yapılmıştır.",
+            bankHint = BankProvider.YAPI_KREDI
+        )
+        assertTrue(k1 is ParseOutcome.Success)
+        assertEquals(5000.0, (k1 as ParseOutcome.Success).transaction.amount, 0.001)
+        assertEquals(3, (k1 as ParseOutcome.Success).transaction.installmentCount)
+
+        // K2: Security disclaimer "kartınızın iptal edilmesi için arayın" must NOT turn expense into REFUND!
+        val k2a = YkbTransactionParser.parse(
+            title = "Garanti BBVA",
+            body = "1234 ile biten kartınızla MİGROS işyerinden 450,00 TL harcama yapılmıştır. Bu işlemi siz yapmadıysanız kartınızın iptal edilmesi için 444 0 333'ü arayın.",
+            bankHint = BankProvider.GARANTI
+        )
+        assertTrue(k2a is ParseOutcome.Success)
+        assertEquals(ParsedTransactionType.EXPENSE, (k2a as ParseOutcome.Success).transaction.transactionType)
+        assertEquals(450.0, (k2a as ParseOutcome.Success).transaction.amount, 0.001)
+
+        // K3: "2.000 TL ve üzeri harcama yapana 200 TL Worldpuan!" and "Ekim ayı harcamalarınız 5.000 TL" -> NOT Success!
+        val k3Promo = YkbTransactionParser.parse(
+            title = "World Mobil",
+            body = "Market alışverişlerinde 2.000 TL ve üzeri harcama yapana 200 TL Worldpuan!",
+            bankHint = BankProvider.YAPI_KREDI
+        )
+        assertTrue(k3Promo is ParseOutcome.Ignored)
+
+        val k3Summary = YkbTransactionParser.parse(
+            title = "Yapı Kredi",
+            body = "Ekim ayı harcamalarınız 5.000,00 TL.",
+            bankHint = BankProvider.YAPI_KREDI
+        )
+        assertFalse(k3Summary is ParseOutcome.Success)
+
+        // K4: Inflected OTP "3D şifresi: 583921" and "583921 kodunu girin" -> Ignored(isSensitiveOtp = true)
+        val k4a = YkbTransactionParser.parse(
+            title = "YAPIKREDI",
+            body = "Trendyol 450,00 TL harcamanız için 3D şifresi: 583921",
+            bankHint = BankProvider.YAPI_KREDI
+        )
+        assertTrue(k4a is ParseOutcome.Ignored && k4a.isSensitiveOtp)
+        assertFalse(YkbTransactionParser.sanitizeForLog("3D şifresi: 583921").contains("583921"))
+
+        val k4b = YkbTransactionParser.parse(
+            title = "GARANTI",
+            body = "İşlemi tamamlamak için 583921 kodunu giriniz.",
+            bankHint = BankProvider.GARANTI
+        )
+        assertTrue(k4b is ParseOutcome.Ignored && k4b.isSensitiveOtp)
+
+        // Ö8: Sentence-level isolation — security footer, statement debt footer, and refund-to-account
+        val secFooter = YkbTransactionParser.parse(
+            title = "Akbank",
+            body = "8812 nolu kartınızla AMAZON işyerinden 1.450,00 TL harcama yapıldı. Şifrenizi kimseyle paylaşmayınız.",
+            bankHint = BankProvider.AKBANK
+        )
+        assertTrue(secFooter is ParseOutcome.Success)
+        assertEquals(1450.0, (secFooter as ParseOutcome.Success).transaction.amount, 0.001)
+
+        val debtFooter = YkbTransactionParser.parse(
+            title = "Yapı Kredi",
+            body = "454312******6251 nolu kartınızla OPET işyerinden 900,00 TL harcama yapıldı. Dönem borcunuz 13.200,00 TL.",
+            bankHint = BankProvider.YAPI_KREDI
+        )
+        assertTrue(debtFooter is ParseOutcome.Success)
+        assertEquals("6251", (debtFooter as ParseOutcome.Success).transaction.cardLast4)
+        assertEquals(900.0, (debtFooter as ParseOutcome.Success).transaction.amount, 0.001)
+
+        val refundToAccount = YkbTransactionParser.parse(
+            title = "Enpara",
+            body = "TRENDYOL işyerinden 250,00 TL iade tutarı hesabınıza yatırılmıştır.",
+            bankHint = BankProvider.ENPARA
+        )
+        assertTrue(refundToAccount is ParseOutcome.Success)
+        assertEquals(ParsedTransactionType.REFUND, (refundToAccount as ParseOutcome.Success).transaction.transactionType)
+    }
 }

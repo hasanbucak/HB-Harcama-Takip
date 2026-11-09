@@ -104,20 +104,17 @@ object YkbTransactionParser {
     private val PERSONAL_PHONE_REGEX = Regex("""^(?:\+?90|0)?5\d{9}$""")
 
     private val EXACT_SENDER_MAP: Map<String, BankProvider> = mapOf(
-        // Yapı Kredi
         "YAPIKREDI" to BankProvider.YAPI_KREDI,
         "YAPI KREDI" to BankProvider.YAPI_KREDI,
         "YAPI KREDI BANKASI" to BankProvider.YAPI_KREDI,
         "4440444" to BankProvider.YAPI_KREDI,
         "08502220444" to BankProvider.YAPI_KREDI,
         "4454" to BankProvider.YAPI_KREDI,
-        // VakıfBank
         "VAKIFBANK" to BankProvider.VAKIFBANK,
         "VAKIF BANK" to BankProvider.VAKIFBANK,
         "08502220724" to BankProvider.VAKIFBANK,
         "4440724" to BankProvider.VAKIFBANK,
         "5724" to BankProvider.VAKIFBANK,
-        // TOM Bank
         "TOMBANK" to BankProvider.TOM_BANK,
         "TOM BANK" to BankProvider.TOM_BANK,
         "TOMKATILIM" to BankProvider.TOM_BANK,
@@ -126,71 +123,66 @@ object YkbTransactionParser {
         "HADI BANK" to BankProvider.TOM_BANK,
         "TOM BANK HADI" to BankProvider.TOM_BANK,
         "08503993636" to BankProvider.TOM_BANK,
-        // Garanti BBVA
         "GARANTI" to BankProvider.GARANTI,
         "GARANTIBBVA" to BankProvider.GARANTI,
         "GARANTI BBVA" to BankProvider.GARANTI,
         "4440333" to BankProvider.GARANTI,
         "3340" to BankProvider.GARANTI,
-        // İş Bankası
+        "ISBANK" to BankProvider.IS_BANKASI,
         "ISBANKASI" to BankProvider.IS_BANKASI,
         "IS BANKASI" to BankProvider.IS_BANKASI,
         "TURKIYE IS BANKASI" to BankProvider.IS_BANKASI,
         "MAXIMUM" to BankProvider.IS_BANKASI,
         "08507240724" to BankProvider.IS_BANKASI,
         "4402" to BankProvider.IS_BANKASI,
-        // Akbank
         "AKBANK" to BankProvider.AKBANK,
         "AXESS" to BankProvider.AKBANK,
         "JUZDAN" to BankProvider.AKBANK,
         "4442525" to BankProvider.AKBANK,
         "4566" to BankProvider.AKBANK,
-        // Ziraat
         "ZIRAAT" to BankProvider.ZIRAAT,
         "ZIRAATBANK" to BankProvider.ZIRAAT,
         "ZIRAAT BANKASI" to BankProvider.ZIRAAT,
         "BANKKART" to BankProvider.ZIRAAT,
         "4440000" to BankProvider.ZIRAAT,
         "4747" to BankProvider.ZIRAAT,
-        // Enpara
         "ENPARA" to BankProvider.ENPARA,
         "ENPARA COM" to BankProvider.ENPARA,
         "ENPARABANK" to BankProvider.ENPARA,
         "08502223663" to BankProvider.ENPARA,
-        // QNB
         "QNB" to BankProvider.QNB,
         "FINANSBANK" to BankProvider.QNB,
         "QNB FINANSBANK" to BankProvider.QNB,
         "CARDFINANS" to BankProvider.QNB,
         "08502220900" to BankProvider.QNB,
         "2273" to BankProvider.QNB,
-        // Kuveyt Türk
         "KUVEYTTURK" to BankProvider.KUVEYT_TURK,
         "KUVEYT TURK" to BankProvider.KUVEYT_TURK,
         "SAGLAMKART" to BankProvider.KUVEYT_TURK,
         "4440123" to BankProvider.KUVEYT_TURK,
-        // TEB
         "TEB" to BankProvider.TEB,
         "CEPTETEB" to BankProvider.TEB,
         "08502000666" to BankProvider.TEB,
         "4600" to BankProvider.TEB,
-        // DenizBank
         "DENIZBANK" to BankProvider.DENIZBANK,
         "DENIZ BANK" to BankProvider.DENIZBANK,
         "MOBILDENIZ" to BankProvider.DENIZBANK,
         "08502220800" to BankProvider.DENIZBANK,
         "3280" to BankProvider.DENIZBANK,
-        // Papara
         "PAPARA" to BankProvider.PAPARA,
         "08503400340" to BankProvider.PAPARA
     )
 
-    private val COMPLETED_TX_VERB_REGEX = Regex(
-        """\b(?:HARCAMA\s+YAP\w+|HARCAMA\s+GERCEKLES\w+|ALISVERIS\s+YAP\w+|ISLEM\s+GERCEKLES\w+|ISLEM\s+YAPIL\w+|ODEME\s+YAPIL\w+|ODEME\s+GERCEKLES\w+|FATURA\s+ODEMENIZ\s+ALIN\w+|CEKIM\s+YAPIL\w+|IADE\w*\s+YAPIL\w+|IADE\s+EDIL\w+|IADE\s+ISLEMI\s+YAP\w+|IPTAL\s+EDIL\w+|IPTAL\s+ISLEMI)\b"""
+    // Sentence splitter that NEVER cuts thousands separators like 1.450,00 or 84.354,50
+    private val SENTENCE_SPLIT_REGEX = Regex("""(?:(?<!\d)\.(?!\d)|[!;\n])+""")
+
+    // Strict completed past-tense verbs (rejects "YAPANA", "YAPIN", "EDILMESI")
+    private val COMPLETED_REFUND_REGEX = Regex(
+        """\b(?:IADE(?:NIZ|SI|LERI)?\s+(?:YAPIL(?:DI|MIS)\w*|EDIL(?:DI|MIS)\w*|GERCEKLES(?:TI|MIS)\w*|YATIRIL(?:DI|MIS)\w*)|IADE\s+TUTARI\b.{0,30}\bYATIRIL(?:DI|MIS)\w*|IADE\s+ISLEMI\s+(?:YAPIL(?:DI|MIS)\w*|GERCEKLES\w*)|IPTAL\s+EDIL(?:DI|MIS)\w*|IPTAL\s+ISLEMI\s+(?:YAPIL(?:DI|MIS)\w*|GERCEKLES\w*))\b"""
     )
 
-    private val GENERAL_TX_SIGNAL_REGEX = Regex(
-        """\b(?:HARCAMA\w*|ALISVERIS\w*|ISLEM\s+GERCEKLES\w*|ISLEM\s+YAPIL\w*|TUTARINDA\s+ISLEM\w*|ODEME\s+YAPIL\w*|ODEME\s+GERCEKLES\w*|FATURA\s+ODEME\w*|CEKIM\s+YAPIL\w*|PROVIZYON\w*|IADE|IADENIZ|IADESI|IPTAL\s+EDIL\w*|IPTAL\s+ISLEMI)\b"""
+    private val COMPLETED_TX_VERB_REGEX = Regex(
+        """\b(?:HARCAMA\s+(?:YAP(?:TI|TIGINIZ|ILDI|ILMIS)\w*|GERCEKLES(?:TI|MIS|TIRILDI|TIRILMIS)\w*)|ALISVERIS\s+(?:YAP(?:TI|TIGINIZ|ILDI|ILMIS)\w*|GERCEKLES\w*)|ISLEM\s+(?:GERCEKLES(?:TI|MIS|TIRILDI|TIRILMIS)\w*|YAPIL(?:DI|MIS)\w*)|ODEME\s+(?:YAP(?:TI|ILDI|ILMIS)\w*|GERCEKLES(?:TI|MIS|TIRILDI|TIRILMIS)\w*)|FATURA\s+ODEME[A-Z]*\s+ALIN(?:DI|MIS)\w*|CEKIM\s+YAPIL(?:DI|MIS)\w*|PROVIZYON\s+ALIN(?:DI|MIS)\w*)\b"""
     )
 
     private val DECLINED_TX_REGEX = Regex(
@@ -202,25 +194,32 @@ object YkbTransactionParser {
     )
 
     private val IBAN_TRANSFER_REGEX = Regex(
-        """(?:\bFAST\s+ILE\b|\bFAST\s+ISLEM\w*\b|\bEFT\b|\bHAVALE\b|\bIBAN\b|\bPARA\s+TRANSFER\w*\b|\bHESABINIZA\s+.{0,40}\b(?:GELMISTIR|YATIRILMISTIR|AKTARILMISTIR)\b)"""
+        """(?:\bFAST\s+ILE\b|\bFAST\s+ISLEM\w*\b|\bEFT\b(?![-/ ]?POS)|\bHAVALE\b|\bIBAN\b|\bPARA\s+TRANSFER\w*\b|\bHESABINIZA\s+.{0,40}\b(?:GELMISTIR|YATIRILMISTIR|AKTARILMISTIR)\b)"""
     )
 
     private val PROMO_OFFER_REGEX = Regex(
-        """\b(?:UZERI\s+ALISVERIS\w*|ALISVERISINIZE|ALISVERISLERINIZE|HARCAMANIZA|HARCAMALARINIZA|IADE\s+FIRSAT\w*|KAZANMA\s+FIRSAT\w*|TAKSIT\s+FIRSAT\w*|FIRSATI\s+KACIRMA\w*|KATILMAK\s+ICIN|HEMEN\s+TIKLA\w*|FAIZLI\s+ESNEK\s+HESAP|LIMITINIZI\s+HEMEN|RET\s+YAZ\w*|MERSIS)\b"""
+        """\b(?:UZERI\s+(?:ALISVERIS|HARCAMA)\w*|HARCAMA\s+YAPANA|ALISVERISINIZE|ALISVERISLERINIZE|HARCAMANIZA|HARCAMALARINIZA|IADE\s+FIRSAT\w*|KAZANMA\s+FIRSAT\w*|TAKSIT\s+FIRSAT\w*|FIRSATI\s+KACIRMA\w*|KATILMAK\s+ICIN|HEMEN\s+TIKLA\w*|FAIZLI\s+ESNEK\s+HESAP|LIMITINIZI\s+HEMEN|RET\s+YAZ\w*|MERSIS)\b"""
     )
 
-    private val DIRECT_OTP_KEYWORDS_REGEX = Regex(
-        """\b(?:TEK\s+KULLANIMLIK|DOGRULAMA\s+KOD\w*|GUVENLIK\s+KOD\w*|AKILLI\s+SIFRE|MOBIL\s+GIRIS|GIRIS\s+SIFRE\w*|SIFRENIZ\w*|PAROLANIZ\w*|KODUNUZ\w*|OTP)\b"""
+    private val DIRECT_OTP_PROMPT_REGEX = Regex(
+        """\b(?:TEK\s+KULLANIMLIK|DOGRULAMA\s+KOD[A-Z]*|GUVENLIK\s+KOD[A-Z]*|AKILLI\s+SIFRE|MOBIL\s+GIRIS\s+SIFRE[A-Z]*|GIRIS\s+KOD[A-Z]*|OTP)\b"""
     )
 
-    private val OTP_CODE_LABEL_REGEX = Regex("""\b(?:SIFRE|PAROLA|KOD|ONAY\s+KODU|PIN)\s*[:=]?\s*\d{4,8}\b""")
+    // Matches "3D SIFRESI: 583921", "SIFRENIZ: 583921", "KODU: 4829", and "583921 KODUNU / SIFRESINI"
+    // Excludes POS receipt "ONAY KODU: 123456" unless accompanied by OTP instruction or lacking completed spend
+    private val EXPLICIT_SECRET_CODE_REGEX = Regex(
+        """\b(?:3D\s+(?:SECURE\s+)?SIFRE[A-Z]*|SIFRE[A-Z]*|PAROLA[A-Z]*|DOGRULAMA\s+KOD[A-Z]*|GUVENLIK\s+KOD[A-Z]*|(?:^|(?<!ONAY\s))KOD[A-Z]*|OTP)\s*[:=]?\s*\d{4,8}\b|\b\d{4,8}\s+(?:NO['’]?LU\s+)?(?:DOGRULAMA\s+|ONAY\s+|GUVENLIK\s+)?(?:KOD|SIFRE|PAROLA)[A-Z]*\b"""
+    )
+
+    private val POS_APPROVAL_CODE_REGEX = Regex("""\bONAY\s+KOD[A-Z]*\s*[:=]?\s*\d{4,8}\b""")
+
     private val OTP_INSTRUCTION_VERB_REGEX = Regex(
-        """\b(?:PAYLASMA\w*|KIMSEYLE|GIRINIZ|GIREREK|ONAYLAYIN\w*|DOGRULA\w*|GECERLIDIR)\b"""
+        """\b(?:PAYLASMA[A-Z]*|KIMSEYLE|GIRINIZ|GIREREK|ONAYLAYIN[A-Z]*|DOGRULAYIN[A-Z]*|GECERLIDIR)\b"""
     )
 
     private val CARD_PATTERNS: List<Regex> = listOf(
-        // 4543****1234, 5400********6251, ****6251, •••• 6251, ..6251
-        Regex("""(?:\b\d{4}[\s*•.xX-]{2,12}|(?:^|[\s(])[*•.xX]{2,10}\s*)(\d{4})\b"""),
+        // 4543****1234, 454312******6251, 4543-12**-****-6251, ****6251, •••• 6251
+        Regex("""(?:\b\d{4,8}[\s*•.xX\d-]{0,6}[*•xX][\s*•.xX-]{1,10}|(?:^|[\s(])[*•.xX]{2,10}\s*)(\d{4})\b"""),
         // Standalone leading *1907 or *4821 (NOT preceded by merchant letters/digits like IYZICO*1234)
         Regex("""(?:^|[\s(])\*(\d{4})\b"""),
         // 6251 nolu / numarali / ile biten / ile sonlanan / son haneli
@@ -234,24 +233,23 @@ object YkbTransactionParser {
     private val DATE_MASK_REGEX = Regex("""\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b""")
     private val TIME_MASK_REGEX = Regex("""\b([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?\b""")
 
+    // Uses non-number-dot sentence stop so "84.354,50 TL" is removed whole without leaving "354,50 TL"
+    private const val CLAUSE_TAIL = """(?:(?!(?<!\d)\.(?!\d)|[!;\n]).)*"""
     private val NOISE_CLAUSE_PATTERNS: List<Regex> = listOf(
-        Regex("""\b(?:GUNCEL\s+)?KULLANILABILIR\s+(?:LIMIT|BAKIYE)\b[^.!;\n]*"""),
-        Regex("""\bKALAN\s+(?:LIMIT|BAKIYE)\b[^.!;\n]*"""),
-        Regex("""\b(?:LIMITINIZ|LIMIT|BAKIYENIZ|BAKIYE)\s*:?\s*(?:TL|TRY|USD|EUR|GBP|₺|\$|€)?\s*\d[\d.,]*\s*(?:TL|TRY|USD|EUR|GBP|₺|\$|€)?[^.!;\n]*"""),
-        Regex("""\bBU\s+ISLEMDEN\b[^.!;\n]*\bPUAN\b[^.!;\n]*"""),
-        Regex("""\bTOPLAM\s+[A-Z-]*PUAN\b[^.!;\n]*"""),
-        Regex("""\bKAZANILAN\s+[A-Z-]*PUAN\b[^.!;\n]*"""),
-        Regex("""\b\d[\d.,]*\s*(?:TL\s*)?(?:WORLDPUAN|CHIP-PARA|CHIPPARA|BONUS|MAXIPUAN|BANKKART\s+LIRA|PARAFPARA)\s+KAZAN\w*[^.!;\n]*"""),
-        Regex("""\bONAY\s+KODU\s*:\s*\d+\b""")
+        Regex("""\b(?:GUNCEL\s+)?KULLANILABILIR\s+(?:LIMIT|BAKIYE)\b$CLAUSE_TAIL"""),
+        Regex("""\bKALAN\s+(?:LIMIT|BAKIYE)\b$CLAUSE_TAIL"""),
+        Regex("""\b(?:LIMITINIZ|LIMIT|BAKIYENIZ|BAKIYE)\s*:?\s*(?:TL|TRY|USD|EUR|GBP|₺|\$|€)?\s*\d[\d.,]*\s*(?:TL|TRY|USD|EUR|GBP|₺|\$|€)?$CLAUSE_TAIL"""),
+        Regex("""\bBU\s+ISLEMDEN\b$CLAUSE_TAIL\bPUAN\b$CLAUSE_TAIL"""),
+        Regex("""\bTOPLAM\s+[A-Z-]*PUAN\b$CLAUSE_TAIL"""),
+        Regex("""\bKAZANILAN\s+[A-Z-]*PUAN\b$CLAUSE_TAIL"""),
+        Regex("""\b\d[\d.,]*\s*(?:TL\s*)?(?:WORLDPUAN|CHIP-PARA|CHIPPARA|BONUS|MAXIPUAN|BANKKART\s+LIRA|PARAFPARA)\s+KAZAN\w*$CLAUSE_TAIL"""),
+        Regex("""\bONAY\s+KOD[A-Z]*\s*[:=]?\s*\d+\b""")
     )
 
-    // Suffix currency: "645,50 TL", "19.99 USD", "645,50 ₺", "14.99 $"
-    // (?![A-Z0-9]) prevents "*4821 TLcard" from matching "4821 TL"
     private val SUFFIX_AMOUNT_REGEX = Regex(
         """(?<![A-Z0-9*])(\d[\d.,]*)\s*(TL|TRY|USD|EUR|GBP|₺|\$|€)(?![A-Z0-9])"""
     )
 
-    // Prefix currency: "TL 645,50", "USD 19.99", "₺645,50", "$14.99"
     private val PREFIX_AMOUNT_REGEX = Regex(
         """(?<![A-Z0-9])(TL|TRY|USD|EUR|GBP|₺|\$|€)\s*(\d[\d.,]*)(?![A-Z0-9])"""
     )
@@ -263,10 +261,6 @@ object YkbTransactionParser {
     private val PLUS_INSTALLMENT_REGEX = Regex("""\b(\d{1,2})\s*\+\s*(\d{1,2})\s*TAKSIT\w*\b""")
     private val COLON_INSTALLMENT_REGEX = Regex("""\bTAKSIT\s*(?:SAYISI|ADEDI)?\s*:\s*(\d{1,2})\b""")
     private val SIMPLE_INSTALLMENT_REGEX = Regex("""\b(\d{1,2})\s*TAKSIT\w*\b""")
-
-    private val REFUND_REGEX = Regex(
-        """\b(?:IADE|IADENIZ|IADESI|IADELERI|IPTAL\s+EDIL\w*|IPTAL\s+ISLEMI)\b"""
-    )
 
     fun resolveBankForPackage(packageName: String): BankProvider? {
         return DIRECT_BANK_PACKAGES[packageName]
@@ -290,8 +284,6 @@ object YkbTransactionParser {
         EXACT_SENDER_MAP[normalized]?.let { return it }
         EXACT_SENDER_MAP[compact]?.let { return it }
 
-        // Bank sender headers with suffix like "YAPI KREDI MOBIL" or "GARANTI BBVA MOBIL",
-        // while strictly rejecting personal names like "HADI YILMAZ" or substring "TEBRIKLER"
         return when {
             normalized.startsWith("YAPI KREDI ") || normalized.startsWith("YAPIKREDI ") -> BankProvider.YAPI_KREDI
             normalized.startsWith("VAKIFBANK ") || normalized.startsWith("VAKIF BANK ") -> BankProvider.VAKIFBANK
@@ -311,35 +303,47 @@ object YkbTransactionParser {
         return resolveBankFromSmsSender(sender) != null
     }
 
+    private fun hasCompletedTxOrRefund(asciiText: String): Boolean {
+        return COMPLETED_TX_VERB_REGEX.containsMatchIn(asciiText) ||
+            COMPLETED_REFUND_REGEX.containsMatchIn(asciiText)
+    }
+
     fun isOtpOrSecurityText(asciiUpper: String): Boolean {
-        val hasCompletedSpend = COMPLETED_TX_VERB_REGEX.containsMatchIn(asciiUpper)
-        if (DIRECT_OTP_KEYWORDS_REGEX.containsMatchIn(asciiUpper)) {
-            if (!hasCompletedSpend || OTP_INSTRUCTION_VERB_REGEX.containsMatchIn(asciiUpper)) {
+        // Any explicit secret code pattern (e.g. "3D şifresi: 583921", "Kod: 4829", "583921 kodunu") is ALWAYS an OTP
+        if (EXPLICIT_SECRET_CODE_REGEX.containsMatchIn(asciiUpper)) {
+            return true
+        }
+        val hasCompletedTx = hasCompletedTxOrRefund(asciiUpper)
+        if (DIRECT_OTP_PROMPT_REGEX.containsMatchIn(asciiUpper)) {
+            return true
+        }
+        if (POS_APPROVAL_CODE_REGEX.containsMatchIn(asciiUpper)) {
+            if (!hasCompletedTx || OTP_INSTRUCTION_VERB_REGEX.containsMatchIn(asciiUpper)) {
                 return true
             }
         }
-        if (OTP_CODE_LABEL_REGEX.containsMatchIn(asciiUpper)) {
-            if (OTP_INSTRUCTION_VERB_REGEX.containsMatchIn(asciiUpper) || !hasCompletedSpend) {
-                return true
-            }
+        // Generic "Şifrenizi kimseyle paylaşmayınız" WITHOUT digits is only OTP when there's NO completed spend sentence!
+        if (!hasCompletedTx && Regex("""\b(?:SIFRENIZ\w*|PAROLANIZ\w*|KODUNUZ\w*)\b""").containsMatchIn(asciiUpper)) {
+            return true
         }
         return false
     }
 
-    /**
-     * Zero-retention sanitizer: if the message is an OTP/security code prompt, drop the body
-     * completely so secrets are never written to SQLite logs; otherwise mask any stray code labels.
-     */
     fun sanitizeForLog(text: String): String {
         if (text.isBlank()) return ""
         val ascii = CategoryClassifier.toAsciiUpper(text)
         if (isOtpOrSecurityText(ascii)) {
             return "[OTP / Güvenlik mesajı — içerik kaydedilmedi]"
         }
-        return text.replace(
-            Regex("""(?i)\b(kod|şifre|sifre|parola|pin|otp)\s*([:=]?)\s*\d{4,8}\b"""),
-            "$1$2 ******"
-        )
+        return text
+            .replace(
+                Regex("""(?i)\b(kod\p{L}*|şifre\p{L}*|sifre\p{L}*|parola\p{L}*|pin|otp)\s*([:=]?)\s*\d{4,8}\b"""),
+                "$1$2 ******"
+            )
+            .replace(
+                Regex("""(?i)\b\d{4,8}\s+(kod\p{L}*|şifre\p{L}*|sifre\p{L}*|parola\p{L}*)\b"""),
+                "****** $1"
+            )
     }
 
     fun parse(
@@ -374,52 +378,48 @@ object YkbTransactionParser {
         // 3. Extract clock time before masking dates & times
         val txClockMinute = extractClockMinute(asciiPrimary)
 
-        // 4. Sentence-level classification
+        // 4. True sentence-level evaluation (never splitting inside numbers like 1.450,00)
         val sentences = asciiPrimary
-            .split(Regex("""[.!;\n]+"""))
+            .split(SENTENCE_SPLIT_REGEX)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
-        val hasCompletedVerbAnywhere = COMPLETED_TX_VERB_REGEX.containsMatchIn(asciiCombined)
-
-        // Check declined/failed status in any transaction sentence
-        if (DECLINED_TX_REGEX.containsMatchIn(asciiCombined)) {
-            return ParseOutcome.Ignored("Başarısız veya reddedilen işlem bildirimi")
+        val validTxSentences = sentences.filter { s ->
+            val isRefundSentence = COMPLETED_REFUND_REGEX.containsMatchIn(s)
+            val isSpendSentence = COMPLETED_TX_VERB_REGEX.containsMatchIn(s)
+            if (!isRefundSentence && !isSpendSentence) return@filter false
+            if (DECLINED_TX_REGEX.containsMatchIn(s)) return@filter false
+            if (CARD_DEBT_OR_STATEMENT_REGEX.containsMatchIn(s)) return@filter false
+            if (PROMO_OFFER_REGEX.containsMatchIn(s)) return@filter false
+            if (!isRefundSentence && IBAN_TRANSFER_REGEX.containsMatchIn(s)) return@filter false
+            true
         }
 
-        // Check card debt / statement payments
-        if (CARD_DEBT_OR_STATEMENT_REGEX.containsMatchIn(asciiCombined)) {
-            return ParseOutcome.Ignored("Kart borcu veya ekstre bilgilendirmesi")
+        if (validTxSentences.isEmpty()) {
+            return when {
+                DECLINED_TX_REGEX.containsMatchIn(asciiCombined) ->
+                    ParseOutcome.Ignored("Başarısız veya reddedilen işlem bildirimi")
+                CARD_DEBT_OR_STATEMENT_REGEX.containsMatchIn(asciiCombined) ->
+                    ParseOutcome.Ignored("Kart borcu veya ekstre bilgilendirmesi")
+                IBAN_TRANSFER_REGEX.containsMatchIn(asciiCombined) ->
+                    ParseOutcome.Ignored("IBAN / para transferi (FAST/EFT/Havale) bildirimi")
+                PROMO_OFFER_REGEX.containsMatchIn(asciiCombined) ->
+                    ParseOutcome.Ignored("Kampanya veya tanıtım bildirimi")
+                else ->
+                    ParseOutcome.Ignored("Tamamlanmış kart harcama veya iade ifadesi bulunamadı")
+            }
         }
 
-        // Check IBAN / FAST / EFT / Havale transfers
-        if (IBAN_TRANSFER_REGEX.containsMatchIn(asciiCombined)) {
-            return ParseOutcome.Ignored("IBAN / para transferi (FAST/EFT/Havale) bildirimi")
-        }
+        val joinedTxSentences = validTxSentences.joinToString(". ")
 
-        // Promotional check ONLY rejects when there is no completed transaction sentence
-        if (!hasCompletedVerbAnywhere && PROMO_OFFER_REGEX.containsMatchIn(asciiCombined)) {
-            return ParseOutcome.Ignored("Kampanya veya tanıtım bildirimi")
-        }
+        // 5. Extract card last4 safely
+        val cardLast4 = extractCardLast4(joinedTxSentences)
+            ?: extractCardLast4(asciiCombined)
+            ?: "GENEL"
 
-        if (!GENERAL_TX_SIGNAL_REGEX.containsMatchIn(asciiCombined)) {
-            return ParseOutcome.Ignored("Harcama veya iade ifadesi bulunamadı")
-        }
-
-        // If message still looks like a conditional offer even with "iade" / "alisveris" noun
-        val txSentences = sentences.filter { s ->
-            GENERAL_TX_SIGNAL_REGEX.containsMatchIn(s) && !PROMO_OFFER_REGEX.containsMatchIn(s)
-        }
-        if (txSentences.isEmpty() && PROMO_OFFER_REGEX.containsMatchIn(asciiCombined)) {
-            return ParseOutcome.Ignored("Kampanya veya tanıtım bildirimi")
-        }
-
-        // 5. Extract card last4 safely (never matching merchant*1234 or amount 6251,00 TL)
-        val cardLast4 = extractCardLast4(asciiCombined) ?: "GENEL"
-
-        // 6. Mask dates/times and strip limit/balance/points clauses before amount extraction
-        val sanitizedForAmount = prepareTextForAmountExtraction(asciiPrimary)
-        val dualMatch = DUAL_CURRENCY_REGEX.find(sanitizedForAmount)
+        // 6. Extract amount from valid transaction sentence(s) FIRST so trailing debt/limit sentences never interfere!
+        val sanitizedTxText = prepareTextForAmountExtraction(joinedTxSentences)
+        val dualMatch = DUAL_CURRENCY_REGEX.find(sanitizedTxText)
 
         val amount: Double
         val currency: String
@@ -431,8 +431,8 @@ object YkbTransactionParser {
             currency = normalizeCurrency(dualMatch.groupValues[2])
             secondaryTl = parseFlexibleAmount(dualMatch.groupValues[3])
         } else {
-            val extracted = extractBestAmountAndCurrency(sanitizedForAmount)
-                ?: extractBestAmountAndCurrency(prepareTextForAmountExtraction(asciiCombined))
+            val extracted = extractBestAmountAndCurrency(sanitizedTxText)
+                ?: extractBestAmountAndCurrency(prepareTextForAmountExtraction(asciiPrimary))
                 ?: return ParseOutcome.Unparsed("Tutar veya para birimi okunamadı")
             amount = extracted.first
             currency = extracted.second
@@ -444,7 +444,7 @@ object YkbTransactionParser {
         }
 
         val cardType = detectCardType(asciiCombined)
-        val txType = detectTransactionType(asciiCombined)
+        val txType = detectTransactionType(joinedTxSentences)
         val installments = extractInstallments(asciiCombined)
         val (merchant, isGeneric) = extractMerchant(cleanTitle, primaryRaw, resolvedBank)
 
@@ -466,7 +466,6 @@ object YkbTransactionParser {
     }
 
     private fun resolveBankFromTextIfNeeded(asciiText: String, hint: BankProvider): BankProvider {
-        // Never allow merchant/ATM text inside a message to override a known package or SMS sender!
         if (hint != BankProvider.OTHER) {
             return hint
         }
@@ -541,8 +540,8 @@ object YkbTransactionParser {
         }
     }
 
-    private fun detectTransactionType(asciiText: String): ParsedTransactionType {
-        return if (REFUND_REGEX.containsMatchIn(asciiText)) {
+    private fun detectTransactionType(txSentencesAscii: String): ParsedTransactionType {
+        return if (COMPLETED_REFUND_REGEX.containsMatchIn(txSentencesAscii)) {
             ParsedTransactionType.REFUND
         } else {
             ParsedTransactionType.EXPENSE
@@ -569,7 +568,7 @@ object YkbTransactionParser {
     private data class AmountCandidate(
         val amount: Double,
         val currency: String,
-        val position: Int
+        val range: IntRange
     )
 
     fun extractAmountAndCurrency(text: String): Pair<Double, String>? {
@@ -578,32 +577,43 @@ object YkbTransactionParser {
     }
 
     private fun extractBestAmountAndCurrency(cleanedAscii: String): Pair<Double, String>? {
-        val candidates = mutableListOf<AmountCandidate>()
+        val suffixCandidates = mutableListOf<AmountCandidate>()
 
         for (m in SUFFIX_AMOUNT_REGEX.findAll(cleanedAscii)) {
             val parsed = parseFlexibleAmount(m.groupValues[1])
             if (parsed != null && parsed > 0.0) {
-                candidates.add(AmountCandidate(parsed, normalizeCurrency(m.groupValues[2]), m.range.first))
+                suffixCandidates.add(
+                    AmountCandidate(parsed, normalizeCurrency(m.groupValues[2]), m.range)
+                )
             }
         }
+
+        val allCandidates = ArrayList<AmountCandidate>(suffixCandidates)
         for (m in PREFIX_AMOUNT_REGEX.findAll(cleanedAscii)) {
-            val overlapsExisting = candidates.any { kotlin.math.abs(it.position - m.range.first) <= 3 }
-            if (!overlapsExisting) {
+            // Check true character-range overlap so "5.000,00 TL 3 taksit" never matches "TL 3"!
+            val overlapsSuffix = suffixCandidates.any { s ->
+                m.range.first <= s.range.last && m.range.last >= s.range.first
+            }
+            if (!overlapsSuffix) {
                 val parsed = parseFlexibleAmount(m.groupValues[2])
                 if (parsed != null && parsed > 0.0) {
-                    candidates.add(AmountCandidate(parsed, normalizeCurrency(m.groupValues[1]), m.range.first))
+                    allCandidates.add(
+                        AmountCandidate(parsed, normalizeCurrency(m.groupValues[1]), m.range)
+                    )
                 }
             }
         }
 
-        if (candidates.isEmpty()) return null
-        if (candidates.size == 1) return candidates[0].amount to candidates[0].currency
+        if (allCandidates.isEmpty()) return null
+        if (allCandidates.size == 1) return allCandidates[0].amount to allCandidates[0].currency
 
-        val verbPos = GENERAL_TX_SIGNAL_REGEX.find(cleanedAscii)?.range?.first
+        val verbPos = (COMPLETED_TX_VERB_REGEX.find(cleanedAscii)
+            ?: COMPLETED_REFUND_REGEX.find(cleanedAscii))?.range?.first
+
         val chosen = if (verbPos != null) {
-            candidates.minByOrNull { kotlin.math.abs(it.position - verbPos) } ?: candidates.first()
+            allCandidates.minByOrNull { kotlin.math.abs(it.range.first - verbPos) } ?: allCandidates.first()
         } else {
-            candidates.first()
+            allCandidates.first()
         }
         return chosen.amount to chosen.currency
     }
@@ -656,10 +666,6 @@ object YkbTransactionParser {
         }
     }
 
-    /**
-     * Uses 1:1 length-preserving ASCII folding to locate merchant ranges without relying on
-     * platform-dependent Turkish Unicode case-insensitive regex, then slices original text.
-     */
     private fun extractMerchant(
         title: String,
         body: String,
@@ -667,7 +673,6 @@ object YkbTransactionParser {
     ): Pair<String, Boolean> {
         val asciiBody = CategoryClassifier.toAsciiUpper(body)
 
-        // Pattern 1: "... TARIHINDE / HH:MM'DE <MERCHANT> ISYERINDEN / ISYERINDE / FIRMASINDAN"
         val p1 = Regex(
             """(?:TARIHINDE|\d{2}:\d{2}['’]?(?:DA|DE|TA|TE)?(?:\s+TARIHINDE)?)\s+(.+?)\s+(?:IS\s*YERINDEN|IS\s*YERINDE|FIRMASINDAN|FIRMASINDA|UYE\s*ISYERINDEN)"""
         )
@@ -676,7 +681,6 @@ object YkbTransactionParser {
             if (cleaned.isNotEmpty()) return cleaned to false
         }
 
-        // Pattern 2: "... KARTINIZLA / KARTTAN / KARTINIZDAN / (1234) ILE [date/PIN] <MERCHANT> ISYERINDEN"
         val p2 = Regex(
             """(?:KARTINIZLA|KART'INIZLA|KART’INIZLA|KARTINIZA|KARTINIZDAN|KARTTAN|KARTINIZ\s+ILE|\(\d{4}\)\s*ILE|BITEN\s+[\w'’]+\s+ILE|BITEN\s+KARTINIZLA|TLCARD\s+ILE)\s+(?:PIN\s+ILE\s+)?(?:\d{2}[./]\d{2}[./]\d{4}(?:\s+\d{2}:\d{2}['’]?(?:DA|DE|TA|TE)?)?\s*(?:TARIHINDE\s+)?)?(.+?)\s+(?:IS\s*YERINDEN|IS\s*YERINDE|FIRMASINDAN|FIRMASINDA)"""
         )
@@ -685,7 +689,6 @@ object YkbTransactionParser {
             if (cleaned.isNotEmpty()) return cleaned to false
         }
 
-        // Pattern 3: "<MERCHANT> ISYERINDEN / ISYERINDE"
         val p3 = Regex(
             """(?:,\s*|\b)([A-Z0-9][A-Z0-9 .&*/_-]{1,45}?)\s+(?:IS\s*YERINDEN|IS\s*YERINDE)\b"""
         )
@@ -702,7 +705,6 @@ object YkbTransactionParser {
             if (cleaned.isNotEmpty()) return cleaned to false
         }
 
-        // Pattern 4: "... KARTINIZLA <MERCHANT>'DA / 'DE / 'DEN <AMOUNT>" (TOMBank / Enpara / Papara)
         val p4 = Regex(
             """(?:KARTINIZLA|KART['’]INIZLA|KARTI['’]NIZLA)\s+(.+?)['’](?:DA|DE|TA|TE|DAN|DEN|TAN|TEN)\s+\d"""
         )
@@ -711,9 +713,9 @@ object YkbTransactionParser {
             if (cleaned.isNotEmpty()) return cleaned to false
         }
 
-        // Pattern 5: "<BRAND> FATURA ODEMENIZ" (e.g. "TURKCELL fatura ödemeniz")
+        // Pattern 5: "<BRAND> FATURA ODEMENIZ" (requiring preceding boundary/card word so card digits aren't included)
         val p5 = Regex(
-            """(?:KARTINIZDAN|KARTINIZLA|HESABINIZDAN)?\s*([A-Z0-9][A-Z0-9 .&-]{1,30}?)\s+FATURA\s+ODEME"""
+            """(?:(?:KARTINIZDAN|KARTINIZLA|HESABINIZDAN)\s+|^)([A-Z][A-Z0-9 .&-]{1,28}?)\s+FATURA\s+ODEME"""
         )
         p5.find(asciiBody)?.groups?.get(1)?.range?.let { r ->
             val cleaned = cleanMerchantName(body.substring(r))

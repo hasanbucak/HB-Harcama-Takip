@@ -127,7 +127,7 @@ interface TransactionDao {
     @Query("UPDATE transactions SET category = :category WHERE normalizedMerchant = :normalizedMerchant AND categoryManual = 0")
     suspend fun updateCategoryForMerchant(normalizedMerchant: String, category: String)
 
-    @Query("UPDATE transactions SET cardType = :cardType, bankName = :bankName WHERE cardKey = :cardKey")
+    @Query("UPDATE transactions SET cardType = :cardType, bankName = CASE WHEN cardType = 'CASH' THEN bankName ELSE :bankName END WHERE cardKey = :cardKey")
     suspend fun updateCardMetadataForTransactions(cardKey: String, cardType: String, bankName: String)
 
     @Query("UPDATE transactions SET groupId = :newGroupId WHERE cardKey = :cardKey AND groupManual = 0")
@@ -172,11 +172,33 @@ interface PendingReviewDao {
     @Query("SELECT * FROM pending_reviews WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): PendingReviewEntity?
 
+    @Query(
+        """
+        SELECT * FROM pending_reviews
+        WHERE resolved = 0
+          AND bankCode = :bankCode
+          AND currency = :currency
+          AND ABS(amount - :amount) < 0.01
+          AND timestamp BETWEEN :minTs AND :maxTs
+        LIMIT 1
+        """
+    )
+    suspend fun findSimilarUnresolved(
+        bankCode: String,
+        amount: Double,
+        currency: String,
+        minTs: Long,
+        maxTs: Long
+    ): PendingReviewEntity?
+
     @Insert
     suspend fun insert(entity: PendingReviewEntity): Long
 
     @Query("UPDATE pending_reviews SET resolved = 1 WHERE id = :id")
     suspend fun markResolved(id: Long)
+
+    @Query("UPDATE pending_reviews SET resolved = 1 WHERE resolved = 0 AND timestamp = :timestamp AND body = :body")
+    suspend fun markResolvedByTimestampAndBody(timestamp: Long, body: String)
 
     @Query("DELETE FROM pending_reviews WHERE resolved = 1 AND timestamp < :olderThanMillis")
     suspend fun pruneResolvedOlderThan(olderThanMillis: Long)
@@ -196,13 +218,15 @@ interface RawLogDao {
     @Query(
         """
         DELETE FROM raw_notification_logs
-        WHERE status NOT IN ('UNPARSED', 'PENDING')
-          AND id NOT IN (
-              SELECT id FROM raw_notification_logs ORDER BY timestamp DESC LIMIT 300
-          )
+        WHERE id NOT IN (
+            SELECT id FROM raw_notification_logs ORDER BY timestamp DESC LIMIT 300
+        )
         """
     )
     suspend fun pruneOldLogs()
+
+    @Query("DELETE FROM raw_notification_logs WHERE timestamp < :olderThanMillis")
+    suspend fun pruneOlderThan(olderThanMillis: Long)
 
     @Query("DELETE FROM raw_notification_logs")
     suspend fun clearAll()

@@ -431,8 +431,8 @@ fun SetupAndLogsScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "• Neler okunur: Yalnızca desteklenen 13 banka mobil uygulamasının ve tanımlı banka SMS/RCS başlıklarının harcama/iade bildirim metinleri okunur. Kişisel sohbetleriniz okunmaz.\n" +
-                            "• Nasıl işlenir: Tutar, işyeri ve kart son 4 hanesi yalnızca telefonunuzun içinde ayrıştırılır. Tek kullanımlık şifre (OTP) içerikleri veritabanına kaydedilmez.\n" +
+                        text = "• Neler okunur: Yalnızca desteklenen 13 banka mobil uygulamasının ve tanımlı banka SMS/RCS başlıklarının bildirimleri kontrol edilir. Kişisel sohbetleriniz okunmaz; harcama/iade olmayan bildirimlerin gövde metinleri saklanmaz.\n" +
+                            "• Nasıl işlenir: Tutar, işyeri ve kart son 4 hanesi yalnızca telefonunuzun içinde ayrıştırılır. Tek kullanımlık şifre (OTP) içerikleri veritabanına yazılmaz.\n" +
                             "• Veri paylaşımı: Uygulamada INTERNET izni yoktur; hiçbir veriniz sunucuya gönderilmez veya üçüncü taraflarla paylaşılmaz.",
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -469,8 +469,8 @@ fun SetupAndLogsScreen(
                 ) {
                     Text(
                         text = "1. Sıfır Ağ Erişimi: Uygulama AndroidManifest üzerinde android.permission.INTERNET izni içermez. Verileriniz cihaz dışına çıkamaz.\n\n" +
-                            "2. OTP Sıfır Kayıt: Şifre ve doğrulama kodu mesajları algılandığında gövde metni veritabanına yazılmaz.\n\n" +
-                            "3. Veri Saklama: Ham bildirim metinleri 30 gün sonra otomatik temizlenir; istediğiniz zaman tüm kayıtları silebilir veya JSON yedeği alabilirsiniz.\n\n" +
+                            "2. OTP ve Elenen Mesaj Koruması: Şifre/doğrulama kodu ve harcama olmayan mesajların gövde metinleri veritabanına kaydedilmez.\n\n" +
+                            "3. Veri Saklama: Ham bildirim metinleri ve günlükler (çözülmemiş bekleyen kayıtlar hariç) 30 gün sonra otomatik temizlenir; istediğiniz zaman tüm kayıtları silebilir veya JSON yedeği alabilirsiniz.\n\n" +
                             "4. Bağımsızlık: Bu uygulama bağımsız bir kişisel finans aracıdır; adı geçen hiçbir bankayla resmi bağlantısı veya ortaklığı yoktur.",
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -699,7 +699,7 @@ private fun RawLogCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.secondary
             )
-            if (log.status == "UNPARSED" || log.status == "IGNORED" || log.status == "PENDING") {
+            if (log.body.isNotBlank() && (log.status == "UNPARSED" || log.status == "IGNORED" || log.status == "PENDING")) {
                 TextButton(onClick = onConvertManual) {
                     Text("Elle Harcamaya Dönüştür")
                 }

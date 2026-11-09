@@ -179,6 +179,7 @@ object BackupSerializer {
                 .append("\"normalizedMerchant\":").append(jsonStr(t.normalizedMerchant)).append(",")
                 .append("\"amount\":").append(String.format(Locale.US, "%.2f", t.amount)).append(",")
                 .append("\"currency\":").append(jsonStr(t.currency)).append(",")
+                .append("\"secondaryAmountTl\":").append(t.secondaryAmountTl?.let { String.format(Locale.US, "%.2f", it) } ?: "null").append(",")
                 .append("\"category\":").append(jsonStr(t.category)).append(",")
                 .append("\"categoryManual\":").append(t.categoryManual).append(",")
                 .append("\"transactionType\":").append(jsonStr(t.transactionType)).append(",")
@@ -197,8 +198,10 @@ object BackupSerializer {
 
     @Suppress("UNCHECKED_CAST")
     fun importJson(jsonText: String): BackupPayload {
-        val root = MiniJsonParser(jsonText.trimStart('\uFEFF')).parseObject()
+        val parser = MiniJsonParser(jsonText.trimStart('\uFEFF'))
+        val root = parser.parseObjectAndEnsureEof()
         val schemaVer = (root["schemaVersion"] as? Number)?.toInt() ?: 1
+        require(schemaVer in 1..10) { "Desteklenmeyen yedek sürümü: $schemaVer" }
         val exportedAt = (root["exportedAt"] as? Number)?.toLong() ?: 0L
 
         val groups = (root["groups"] as? List<Map<String, Any?>>).orEmpty().mapNotNull { m ->
@@ -257,6 +260,7 @@ object BackupSerializer {
                 normalizedMerchant = m["normalizedMerchant"] as? String ?: "",
                 amount = amount,
                 currency = m["currency"] as? String ?: "TL",
+                secondaryAmountTl = (m["secondaryAmountTl"] as? Number)?.toDouble(),
                 category = m["category"] as? String ?: "Diğer",
                 categoryManual = m["categoryManual"] as? Boolean ?: false,
                 transactionType = m["transactionType"] as? String ?: "EXPENSE",
@@ -309,6 +313,15 @@ object BackupSerializer {
 
     private class MiniJsonParser(private val src: String) {
         private var pos = 0
+
+        fun parseObjectAndEnsureEof(): Map<String, Any?> {
+            val obj = parseObject()
+            skipWs()
+            if (pos != src.length) {
+                throw IllegalArgumentException("Trailing content after JSON root at $pos")
+            }
+            return obj
+        }
 
         fun parseObject(): Map<String, Any?> {
             skipWs()
@@ -425,7 +438,7 @@ object BackupSerializer {
                 val c = src[pos]
                 if (c in '0'..'9') {
                     pos++
-                } else if (c == '.' || c == 'e' || c == 'E' || c == '+') {
+                } else if (c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') {
                     isFloat = true
                     pos++
                 } else {
