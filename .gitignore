@@ -1,0 +1,23 @@
+# Gradle & build outputs
+.gradle/
+build/
+**/build/
+local.properties
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Keystores & release artifacts
+*.jks
+*.keystore
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Captures & logs
+captures/
+*.log

@@ -1,0 +1,479 @@
+package com.hasanbucak.harcamatakip.ui.screens
+
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.hasanbucak.harcamatakip.data.local.RawNotificationLogEntity
+import com.hasanbucak.harcamatakip.ui.DashboardUiState
+import com.hasanbucak.harcamatakip.ui.Formatters
+import com.hasanbucak.harcamatakip.ui.MainViewModel
+import com.hasanbucak.harcamatakip.util.SystemPermissionHelper
+
+@Composable
+fun SetupAndLogsScreen(
+    state: DashboardUiState,
+    viewModel: MainViewModel
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var notifEnabled by remember { mutableStateOf(SystemPermissionHelper.isNotificationListenerEnabled(context)) }
+    var smsGranted by remember { mutableStateOf(SystemPermissionHelper.isSmsPermissionGranted(context)) }
+    var batteryIgnored by remember { mutableStateOf(SystemPermissionHelper.isIgnoringBatteryOptimizations(context)) }
+    var customTestText by remember { mutableStateOf("") }
+    var convertingLog by remember { mutableStateOf<RawNotificationLogEntity?>(null) }
+
+    fun refreshPermissions() {
+        notifEnabled = SystemPermissionHelper.isNotificationListenerEnabled(context)
+        smsGranted = SystemPermissionHelper.isSmsPermissionGranted(context)
+        batteryIgnored = SystemPermissionHelper.isIgnoringBatteryOptimizations(context)
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshPermissions()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val smsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {
+        refreshPermissions()
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Offline privacy guarantee banner
+        item {
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "İnternet izni (INTERNET) manifest'te kapalıdır. Tüm kart ve harcama kayıtları yalnızca telefonun yerel SQLite veritabanında tutulur.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+        }
+
+        // Permissions checklist card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "1. Android İzin Durumu",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    PermissionRow(
+                        title = "Bildirim Erişimi (Yapı Kredi & World Mobil)",
+                        subtitle = if (notifEnabled) {
+                            "Aktif • com.ykb.android ve com.ykb.avm dinleniyor"
+                        } else {
+                            "Kapalı • Push bildirimlerini okumak için açılmalı"
+                        },
+                        granted = notifEnabled,
+                        actionLabel = "Ayarları Aç",
+                        onAction = {
+                            context.startActivity(SystemPermissionHelper.buildNotificationListenerSettingsIntent())
+                        }
+                    )
+
+                    HorizontalDivider()
+
+                    PermissionRow(
+                        title = "SMS Okuma İzni (YAPIKREDI SMS Yedeği)",
+                        subtitle = if (smsGranted) {
+                            "Aktif • İnternetsiz ortamda SMS harcamaları yakalanır"
+                        } else {
+                            "Kapalı • SMS bildirimlerini yakalamak için izin verin"
+                        },
+                        granted = smsGranted,
+                        actionLabel = "İzin Ver",
+                        onAction = {
+                            smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS)
+                        }
+                    )
+
+                    HorizontalDivider()
+
+                    PermissionRow(
+                        title = "Pil Kısıtlaması Muafiyeti",
+                        subtitle = if (batteryIgnored) {
+                            "Aktif • Arka planda kapanmaya karşı korumalı"
+                        } else {
+                            "Kısıtlı • Android'in servisi uyutmaması için muaf tutun"
+                        },
+                        granted = batteryIgnored,
+                        actionLabel = "Muaf Tut",
+                        onAction = {
+                            context.startActivity(SystemPermissionHelper.buildBatteryOptimizationIntent(context))
+                        }
+                    )
+
+                    if (!notifEnabled || !smsGranted) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Android 13/14/15 'Kısıtlı Ayar' Uyarısı Çıkarsa:",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "APK elle kurulduğunda izin düğmesi gri görünebilir. Aşağıdaki 'Uygulama Bilgisi' ekranını açıp sağ üstteki (⋮) menüden 'Kısıtlı ayarlara izin ver' seçeneğine dokunun.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                TextButton(
+                                    onClick = {
+                                        context.startActivity(SystemPermissionHelper.buildAppDetailsSettingsIntent(context))
+                                    }
+                                ) {
+                                    Text("Uygulama Bilgisi Ekranını Aç")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Yapi Kredi internal app settings reminder
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "2. Yapı Kredi / World Mobil Ayar Kontrolü",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "• Yapı Kredi Mobil veya World Mobil -> Profilim / Ayarlarım -> Bildirim Ayarları menüsünden Kredi Kartı ve Banka Kartı harcama bildirimlerinin açık olduğundan emin olun.\n• Bildirim alt limit tutarı varsa 0 TL yapın ki küçük temassız işlemler de anında düşsün.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // Simulation & custom parser tester
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "3. Canlı Ayrıştırıcı (Parser) Testi",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Button(
+                        onClick = { viewModel.simulateNextSample() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Örnek Yapı Kredi Harcaması Simüle Et")
+                    }
+
+                    OutlinedTextField(
+                        value = customTestText,
+                        onValueChange = { customTestText = it },
+                        label = { Text("Gerçek SMS / Bildirim metnini yapıştırıp test et") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (customTestText.isNotBlank()) {
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.testCustomNotificationText(customTestText)
+                                customTestText = ""
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Metni İşle ve Kaydet")
+                        }
+                    }
+
+                    state.lastTestFeedback?.let { msg ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text(
+                                text = msg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Raw logs header
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Ham Bildirim Günlüğü (${state.recentLogs.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                if (state.recentLogs.isNotEmpty()) {
+                    AssistChip(
+                        onClick = { viewModel.clearRawLogs() },
+                        label = { Text("Temizle") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.DeleteSweep,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    )
+                }
+            }
+        }
+
+        if (state.recentLogs.isEmpty()) {
+            item {
+                Text(
+                    text = "Henüz yakalanan bildirim yok.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            items(state.recentLogs, key = { it.id }) { log ->
+                RawLogCard(
+                    log = log,
+                    onConvertUnparsed = { convertingLog = log }
+                )
+            }
+        }
+
+        item { Spacer(modifier = Modifier.height(24.dp)) }
+    }
+
+    convertingLog?.let { log ->
+        AddManualTransactionDialog(
+            cards = state.cards,
+            initialRawText = log.body,
+            onDismiss = { convertingLog = null },
+            onSave = { last4, merchant, amount, currency, category, isRefund, installments, note ->
+                viewModel.addManualTransaction(
+                    cardLast4 = last4,
+                    merchant = merchant,
+                    amount = amount,
+                    currency = currency,
+                    category = category,
+                    isRefund = isRefund,
+                    installmentCount = installments,
+                    note = note,
+                    rawText = log.body,
+                    sourceLogId = log.id
+                )
+                convertingLog = null
+            }
+        )
+    }
+}
+
+@Composable
+private fun PermissionRow(
+    title: String,
+    subtitle: String,
+    granted: Boolean,
+    actionLabel: String,
+    onAction: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (granted) Icons.Default.CheckCircle else Icons.Default.Warning,
+            contentDescription = null,
+            tint = if (granted) Color(0xFF16A34A) else Color(0xFFD97706),
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (!granted) {
+            Spacer(modifier = Modifier.width(8.dp))
+            OutlinedButton(onClick = onAction) {
+                Text(actionLabel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RawLogCard(
+    log: RawNotificationLogEntity,
+    onConvertUnparsed: () -> Unit
+) {
+    val badgeColor = when (log.status) {
+        "SAVED" -> Color(0xFF16A34A)
+        "DUPLICATE" -> Color(0xFF0284C7)
+        "UNPARSED" -> Color(0xFFDC2626)
+        else -> Color(0xFF6B7280)
+    }
+
+    val statusText = when (log.status) {
+        "SAVED" -> "KAYDEDİLDİ"
+        "DUPLICATE" -> "MÜKERRER ENGELLENDİ"
+        "UNPARSED" -> "AYRIŞTIRILAMADI"
+        else -> "HARCAMA DEĞİL"
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = badgeColor
+                )
+                Text(
+                    text = "${log.sourceChannel} • ${Formatters.formatDateTime(log.timestamp)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = log.body.ifBlank { log.title },
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = log.detail,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.secondary
+            )
+            if (log.status == "UNPARSED") {
+                TextButton(onClick = onConvertUnparsed) {
+                    Text("Elle Harcamaya Dönüştür")
+                }
+            }
+        }
+    }
+}
