@@ -190,10 +190,8 @@ class TransactionRepository(private val db: AppDatabase) {
 
         val count = db.cardDao().countCards()
         val color = when (bank) {
-            BankProvider.VAKIFBANK -> BankProvider.VAKIFBANK.defaultColorHex
-            BankProvider.TOM_BANK -> BankProvider.TOM_BANK.defaultColorHex
             BankProvider.YAPI_KREDI -> YKB_CARD_PALETTE[count % YKB_CARD_PALETTE.size]
-            BankProvider.OTHER -> BankProvider.OTHER.defaultColorHex
+            else -> bank.defaultColorHex
         }
 
         val defaultAlias = when {
